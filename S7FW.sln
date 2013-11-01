@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 10.00
+# Visual Studio 2008
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "S7FW", "S7FW\S7FW.vcproj", "{064B78B4-93F6-42B9-BA73-35A5422EB292}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LoadSys", "LoadSys\LoadSys.vcproj", "{CFA98A35-1A97-4884-815F-31CAC03EBC88}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FWServer", "FWServer\FWServer.vcproj", "{E503EB83-93B0-41AD-950A-BD308DBB7C95}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{064B78B4-93F6-42B9-BA73-35A5422EB292}.Debug|Win32.ActiveCfg = Debug|Win32
+		{064B78B4-93F6-42B9-BA73-35A5422EB292}.Release|Win32.ActiveCfg = Release|Win32
+		{064B78B4-93F6-42B9-BA73-35A5422EB292}.Release|Win32.Build.0 = Release|Win32
+		{CFA98A35-1A97-4884-815F-31CAC03EBC88}.Debug|Win32.ActiveCfg = Debug|Win32
+		{CFA98A35-1A97-4884-815F-31CAC03EBC88}.Debug|Win32.Build.0 = Debug|Win32
+		{CFA98A35-1A97-4884-815F-31CAC03EBC88}.Release|Win32.ActiveCfg = Release|Win32
+		{CFA98A35-1A97-4884-815F-31CAC03EBC88}.Release|Win32.Build.0 = Release|Win32
+		{E503EB83-93B0-41AD-950A-BD308DBB7C95}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E503EB83-93B0-41AD-950A-BD308DBB7C95}.Debug|Win32.Build.0 = Debug|Win32
+		{E503EB83-93B0-41AD-950A-BD308DBB7C95}.Release|Win32.ActiveCfg = Release|Win32
+		{E503EB83-93B0-41AD-950A-BD308DBB7C95}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
