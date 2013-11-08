@@ -1,47 +1,8 @@
 #ifndef _LOG_H_
 #define _LOG_H_
+#include "..\include\userioctrl.h"
 
 extern KEVENT logging_event;
-
-#define LOG_BUFSIZE 64*1024 // 64k
-
-typedef enum _PacketStatus
-{
-	PacketDrop,
-	PacketPass
-}PacketStatus;
-
-typedef enum _PackDirection
-{
-	PACKET_IN,
-	PACKET_OUT,
-	PACKET_BOTH
-} PacketDirection;
-
-typedef struct _PktFltRule
-{
-	UCHAR srcIpAddr[4];
-	UCHAR dstIpAddr[4];
-	USHORT srcPort;
-	USHORT dstPort;
-	UCHAR protocol;
-	PacketDirection direction;
-	PacketStatus status;
-} PktFltRule;
-
-typedef struct _PacketRecord 
-{
-	USHORT etherType;
-	UCHAR srcMac[6];
-	UCHAR dstMac[6];
-	UCHAR protocol;
-	UCHAR srcIP[4];
-	USHORT srcPort;
-	UCHAR dstIP[4];
-	USHORT dstPort;
-	UCHAR status;
-	ULONG dataLen;
-} PacketRecord;
 
 typedef struct _WorkItemCtx
 {
@@ -66,8 +27,10 @@ typedef struct _LogBuffer
 #define MAX_LOGSIZE (LOG_BUFSIZE - sizeof(LogBuffer))
 #define ALLOC_LOG_BUFFER() ExAllocatePoolWithTag(PagedPool,LOG_BUFSIZE,LOG_TAG)
 
-BOOLEAN GetFirstLog(UCHAR *userBuffer,ULONG len,ULONG *retLen);
+BOOLEAN GetFirstLog();
 void LogRecord(PacketRecord *record);
+void InitLogRecord();
+void PushLogWorkerThread(IN PVOID pContext);
 #endif
 
 

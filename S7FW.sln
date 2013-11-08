@@ -6,6 +6,9 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LoadSys", "LoadSys\LoadSys.vcproj", "{CFA98A35-1A97-4884-815F-31CAC03EBC88}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FWServer", "FWServer\FWServer.vcproj", "{E503EB83-93B0-41AD-950A-BD308DBB7C95}"
+	ProjectSection(ProjectDependencies) = postProject
+		{CFA98A35-1A97-4884-815F-31CAC03EBC88} = {CFA98A35-1A97-4884-815F-31CAC03EBC88}
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

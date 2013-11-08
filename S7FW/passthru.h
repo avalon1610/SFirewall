@@ -347,7 +347,7 @@ PtDereferenceAdapt(
 
 #define DBGPRINT(Fmt)                                        \
     {                                                        \
-        DbgPrint("Passthru: ");                                \
+        DbgPrint("S7FW: ");								     \
         DbgPrint Fmt;                                        \
     }
 

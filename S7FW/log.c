@@ -2,6 +2,27 @@
 
 LIST_ENTRY log_list;
 KMUTEX log_mutex;
+KEVENT logging_event;
+
+extern PVOID g_pSySAddr;
+extern PKEVENT g_pEvent;
+extern PKEVENT g_kEvent;
+extern PKEVENT g_ExitEvent;
+extern BOOLEAN b_ExitThread;
+
+void InitLogRecord()
+{
+	LogBuffer *log = (LogBuffer *)ALLOC_LOG_BUFFER();
+	log->len = 0;
+	KeInitializeEvent(&logging_event,SynchronizationEvent,FALSE);
+
+	InitializeListHead(&log_list);
+	MUTEX_INIT(log_mutex);
+
+	MUTEX_ACQUIRE(log_mutex);
+	InsertTailList(&log_list,&log->next);
+	MUTEX_RELEASE(log_mutex);
+}
 
 BOOLEAN IsLogBufferFull(LogBuffer *log_buffer,PacketRecord *record)
 {
@@ -42,14 +63,11 @@ void NewLogBuffer(PacketRecord *record)
 
 void WriteLogBuffer(PacketRecord *record)
 {
-	KIRQL irql;
 	LogBuffer *log_buffer = NULL;
 	LIST_ENTRY *nextLogBuf = &log_list;
-	irql = KeGetCurrentIrql();
-	ASSERT(irql == PASSIVE_LEVEL);
+	ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
 	MUTEX_ACQUIRE(log_mutex);
-	irql = KeGetCurrentIrql();
-	ASSERT(irql == PASSIVE_LEVEL);
+	ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
 	while (nextLogBuf->Flink != &log_list)
 	{
 		nextLogBuf = nextLogBuf->Flink;
@@ -117,40 +135,63 @@ void LogRecord(PacketRecord *record)
 	}
 }
 
-BOOLEAN GetFirstLog(UCHAR *userBuffer,ULONG len,ULONG *retLen)
+BOOLEAN GetFirstLog()
 {
-	if (len < LOG_BUFSIZE)
-		return FALSE;
+	LogBuffer *log_buffer = NULL;
+	LIST_ENTRY *log_entry = log_list.Flink;
+	MUTEX_ACQUIRE(log_mutex);
+
+	if (log_entry != &log_list)
+	{
+		UCHAR *log;
+		ULONG log_len;
+		log_buffer = CONTAINING_RECORD(log_entry,LogBuffer,next);
+
+		log = ((UCHAR *)log_buffer) + sizeof(LogBuffer);
+		log_len = log_buffer->len;
+
+		RtlCopyMemory(g_pSySAddr,log,log_len);
+
+		RemoveEntryList(log_entry);
+
+		FREE_LOG_BUFFER(log_buffer);
+		MUTEX_RELEASE(log_mutex);
+	}
 	else
 	{
-		//KIRQL irql;
-		LogBuffer *log_buffer = NULL;
-		LIST_ENTRY *log_entry = log_list.Flink;
-		MUTEX_ACQUIRE(log_mutex);
-
-		if (log_entry != &log_list)
-		{
-			UCHAR *log;
-			ULONG log_len;
-			log_buffer = CONTAINING_RECORD(log_entry,LogBuffer,next);
-
-			log = ((UCHAR *)log_buffer) + sizeof(LogBuffer);
-			log_len = log_buffer->len;
-
-			RtlCopyMemory(userBuffer,log,log_len);
-			*retLen = log_len;
-
-			RemoveEntryList(log_entry);
-
-			FREE_LOG_BUFFER(log_buffer);
-			MUTEX_RELEASE(log_mutex);
-		}
-		else
-		{
-			MUTEX_RELEASE(log_mutex);
-			*retLen = 0;
-		}
-
-		return TRUE;
+		MUTEX_RELEASE(log_mutex);
 	}
+
+	return TRUE;
+	
 }
+
+void PushLogWorkerThread(IN PVOID pContext)
+{
+	PKEVENT obj[2];
+	UNREFERENCED_PARAMETER(pContext);
+	if (g_pEvent == NULL || g_ExitEvent == NULL)
+		return;
+
+	while (TRUE)
+	{
+		if (g_pEvent == NULL)
+			continue;
+		obj[0] = g_pEvent;
+		obj[1] = g_ExitEvent;
+		KeWaitForMultipleObjects(2,(PVOID *)&obj,WaitAny,SYNCHRONIZE,KernelMode,FALSE,NULL,NULL);
+		//KeWaitForSingleObject(g_pEvent,SYNCHRONIZE,KernelMode,FALSE,NULL);
+		if (b_ExitThread)
+			break;
+		if (g_pSySAddr && g_pEvent && g_kEvent)
+		{
+			GetFirstLog();
+			KeSetEvent(g_kEvent,0,FALSE);
+			KeResetEvent(g_pEvent);
+		}
+	}
+
+	PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+

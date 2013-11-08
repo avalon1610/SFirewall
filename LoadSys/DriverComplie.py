@@ -55,12 +55,6 @@ for path in build_path:
 	cmd.command("build")
 
 cmd.command("exit")
-
-import shutil
-try:
-	shutil.copyfile('.\\objchk_win7_x86\\i386\s7fw.sys','..\\Debug\\s7fw.sys')
-except:
-	print 'copy error'
 getch()
 
 

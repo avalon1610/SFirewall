@@ -9,6 +9,7 @@
 #pragma warning(disable:4995)
 #pragma warning(disable:4996)
 
+#include <ntifs.h>
 #include <ndis.h>
 #include "passthru.h"
 #include "log.h"

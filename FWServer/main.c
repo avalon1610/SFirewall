@@ -7,7 +7,11 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <errno.h>
+
 #include "mongoose.h"
+#include "sql.h"
+#include "comm.h"
+#include "../LoadSys/LoadSys.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -340,8 +344,38 @@ static void start_mongoose(int argc,char *argv[])
 	}
 }
 
+void wait()
+{
+	MSG msg;
+	while (GetMessageA(&msg,NULL,0,0))
+	{
+		TranslateMessage(&msg);
+		DispatchMessageA(&msg);
+	}
+}
+
+#define INF_NAME "netsf"
 int main(int argc,char *argv[])
 {
+	char path[MAX_PATH] = {0};
+	char name[32] = {0};
+	char msg[128] = {0};
+	
+	//setup database
+	if (!sql_init("database.db"))
+		return EXIT_FAILURE;
+
+	// load driver
+	_getcwd(path,MAX_PATH);
+	strncat(path,"\\",1);
+	strncat(path,INF_NAME,strlen(INF_NAME));
+	strncat(path,".inf",4);
+	load_driver_inf(path);
+
+	// Communication with driver
+	setup_comm();
+
+	// start web server
 	init_server_name();
 	start_mongoose(argc,argv);
 	printf("%s started on port(s) %s with web root [%s]\n",

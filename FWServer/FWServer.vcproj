@@ -21,7 +21,7 @@
 			OutputDirectory="$(SolutionDir)$(ConfigurationName)"
 			IntermediateDirectory="$(ConfigurationName)"
 			ConfigurationType="1"
-			CharacterSet="1"
+			CharacterSet="2"
 			>
 			<Tool
 				Name="VCPreBuildEventTool"
@@ -44,10 +44,11 @@
 				PreprocessorDefinitions="WIN32;_DEBUG;_CONSOLE"
 				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
-				RuntimeLibrary="3"
+				RuntimeLibrary="1"
 				UsePrecompiledHeader="0"
 				WarningLevel="3"
 				DebugInformationFormat="4"
+				CompileAs="1"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -60,7 +61,10 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
+				AdditionalDependencies="LoadSys.lib"
 				LinkIncremental="2"
+				AdditionalLibraryDirectories="E:\Projects\SFirewall\Debug"
+				UACExecutionLevel="2"
 				GenerateDebugInformation="true"
 				SubSystem="1"
 				TargetMachine="1"
@@ -171,11 +175,19 @@
 			UniqueIdentifier="{4FC737F1-C7A5-4376-A066-2A32D752A2FF}"
 			>
 			<File
+				RelativePath=".\comm.c"
+				>
+			</File>
+			<File
 				RelativePath=".\main.c"
 				>
 			</File>
 			<File
 				RelativePath=".\mongoose.c"
+				>
+			</File>
+			<File
+				RelativePath=".\sql.c"
 				>
 			</File>
 		</Filter>
@@ -185,7 +197,15 @@
 			UniqueIdentifier="{93995380-89BD-4b04-88EB-625FBE52EBFB}"
 			>
 			<File
+				RelativePath=".\comm.h"
+				>
+			</File>
+			<File
 				RelativePath=".\mongoose.h"
+				>
+			</File>
+			<File
+				RelativePath=".\sql.h"
 				>
 			</File>
 		</Filter>

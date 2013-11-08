@@ -44,7 +44,7 @@
 				PreprocessorDefinitions="WIN32;_DEBUG;_LIB"
 				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
-				RuntimeLibrary="3"
+				RuntimeLibrary="1"
 				UsePrecompiledHeader="2"
 				WarningLevel="3"
 				DebugInformationFormat="4"
@@ -149,7 +149,15 @@
 			UniqueIdentifier="{4FC737F1-C7A5-4376-A066-2A32D752A2FF}"
 			>
 			<File
+				RelativePath=".\Component.cpp"
+				>
+			</File>
+			<File
 				RelativePath=".\LoadSys.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\NetCfgAPI.cpp"
 				>
 			</File>
 			<File
@@ -180,6 +188,10 @@
 			>
 			<File
 				RelativePath=".\LoadSys.h"
+				>
+			</File>
+			<File
+				RelativePath=".\NetCfgAPI.h"
 				>
 			</File>
 			<File

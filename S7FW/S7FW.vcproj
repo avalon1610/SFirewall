@@ -212,6 +212,10 @@
 				RelativePath=".\precomp.h"
 				>
 			</File>
+			<File
+				RelativePath="..\include\userioctrl.h"
+				>
+			</File>
 		</Filter>
 		<Filter
 			Name="Resource Files"

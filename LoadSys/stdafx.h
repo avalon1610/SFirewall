@@ -12,6 +12,14 @@
 
 
 // TODO: reference additional headers your program requires here
-#include <Windows.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <Windows.h>
+#include <WindowsX.h>
 #include <tchar.h>
+#include <netcfgx.h>
+#include <netcfgn.h>
+#include <setupapi.h>
+#include <devguid.h>
+#include <ObjBase.h>
+#include <strsafe.h>

@@ -5,9 +5,6 @@
 extern INT packetmgrDebugLevel;
 #define PACKET_FILTER_TAG 'pAck'
 
-#define IOCTL_GET_LOG CTL_CODE(FILE_DEVICE_UNKNOWN,0x801,METHOD_BUFFERED,FILE_READ_DATA|FILE_WRITE_DATA)
-#define IOCTL_ADD_RULE CTL_CODE(FILE_DEVICE_UNKNOWN,0x802,METHOD_BUFFERED,FILE_READ_DATA|FILE_WRITE_DATA)
-
 #define DL_EXTRA_LOUD	20
 #define DL_VERY_LOUD	10
 #define DL_LOUD			8
@@ -23,14 +20,6 @@ extern INT packetmgrDebugLevel;
 		DbgPrint("S7FW: ");DbgPrint stmt;	\
 	}										\
 }											\
-
-#define TCP_PROTOCOL 0x06
-#define UDP_PROTOCOL 0x11
-#define ICMP_PROTOCOL 0x01
-
-#define IP_TYPE 0x0008
-#define ARP_TYPE 0x0608
-#define RARP_TYPE 0x3580
 
 #define DHCP_SRC_PORT	103
 #define DHCP_DST_PORT	104
@@ -87,12 +76,19 @@ typedef struct _TCPHeader
 	USHORT urgentPointer;
 } TCPHeader;
 
+typedef struct PktFltEntry
+{
+	LIST_ENTRY next;
+	PktFltRule pkt_flt_rule;
+} PktFltEntry;
+
 PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction);
 UCHAR *PMgrGetIpData(IPHeader *ipHeader);
 UCHAR *PMgrGetTcpData(TCPHeader *tcpHeader);
 VOID PMgrGetPktData(IN PNDIS_PACKET Packet,OUT PUCHAR pDst,IN ULONG length);
 VOID PMgrFreeRecvPkt(IN PADAPT pAdaptContext,IN PNDIS_PACKET pNdisPacket);
 PNDIS_PACKET PMgrAllocRecvPkt(IN PADAPT pAdaptContext,IN UINT DataLength,OUT PUCHAR * ppDataBuffer);
+VOID InitPktFltList();
 #define IP_VERSION(versionLen) (((versionLen)&(0xF0))>>4)
 #define IP_HEADERLEN(versionLen) (versionLen)&(0x0F)
 #define TCP_HEADERLEN(rsvLen) (((rsvLen)&(0xF0))>>4)

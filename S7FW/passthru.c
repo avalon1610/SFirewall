@@ -43,6 +43,16 @@ LONG               MiniportCount = 0;
 
 NDIS_HANDLE        NdisWrapperHandle;
 
+PVOID			g_pSySAddr = NULL;
+PMDL			g_pMdl = NULL;	// memory shared with ring3
+PKEVENT			g_pEvent = NULL;// event created at user mode
+PKEVENT			g_kEvent;		// event created at kernel mode
+HANDLE			g_LogThread = NULL;
+CLIENT_ID		g_LogClientId;
+PKEVENT			g_ExitEvent;
+BOOLEAN			b_ExitThread = FALSE;
+
+
 //
 // To support ioctls from user-mode:
 //
@@ -92,6 +102,15 @@ Return Value:
     NDIS_PROTOCOL_CHARACTERISTICS      PChars;
     NDIS_MINIPORT_CHARACTERISTICS      MChars;
     NDIS_STRING                        Name;
+	HANDLE	exit_event_handle = NULL;
+	UNICODE_STRING evtname;
+
+	g_pSySAddr = ExAllocatePoolWithTag(NonPagedPool,LOG_BUFSIZE,PACKET_FILTER_TAG);
+	g_pMdl = IoAllocateMdl(g_pSySAddr,LOG_BUFSIZE,FALSE,FALSE,NULL);
+	MmBuildMdlForNonPagedPool(g_pMdl);
+
+	InitPktFltList();
+	InitLogRecord();
 
     Status = NDIS_STATUS_SUCCESS;
     NdisAllocateSpinLock(&GlobalLock);
@@ -165,7 +184,7 @@ Return Value:
         // This is needed to ensure that NDIS can correctly determine
         // the binding and call us to bind to miniports below.
         //
-        NdisInitUnicodeString(&Name, L"Passthru");    // Protocol name
+        NdisInitUnicodeString(&Name, L"S7FW");    // Protocol name
         PChars.Name = Name;
         PChars.OpenAdapterCompleteHandler = PtOpenAdapterComplete;
         PChars.CloseAdapterCompleteHandler = PtCloseAdapterComplete;
@@ -204,6 +223,15 @@ Return Value:
     {
         NdisTerminateWrapper(NdisWrapperHandle, NULL);
     }
+
+	RtlInitUnicodeString(&evtname,L"\\BaseNamedObjects\\exit_event");
+	g_ExitEvent = IoCreateSynchronizationEvent(&evtname,&exit_event_handle);
+	if (g_ExitEvent == NULL)
+		DBGPRINT(("IoCreateSynchronizationEvent g_ExitEvent failed:%08X\n",Status));
+
+	Status = PsCreateSystemThread(&g_LogThread,0,NULL,NULL,&g_LogClientId,(PKSTART_ROUTINE)PushLogWorkerThread,NULL);
+	if (!NT_SUCCESS(Status))
+		DBGPRINT(("Create PushLogWorkerThread failed:%08X\n",Status));
 
     return(Status);
 }
@@ -361,17 +389,42 @@ Return Value:
 				PVOID Buffer = Irp->AssociatedIrp.SystemBuffer;
 				switch(IrpSp->Parameters.DeviceIoControl.IoControlCode)
 				{
-				case IOCTL_GET_LOG:
+				case IOCTL_SET_EVENT:
 					{
-						ULONG ret_len;
-						BOOLEAN bRet = GetFirstLog(Buffer,InputBufferLen,&ret_len);
-						if (!bRet)
+						HANDLE				hEvent,kEvent;
+						OBJECT_HANDLE_INFORMATION objHandleInfo;
+						UNICODE_STRING EvtName;
+
+						if (Buffer == NULL || InputBufferLen < sizeof(HANDLE))
 						{
-							status = STATUS_BUFFER_TOO_SMALL;
-							Irp->IoStatus.Information = 0;
+							status = STATUS_INVALID_BUFFER_SIZE;
+							break;
 						}
-						else
-							Irp->IoStatus.Information = ret_len;
+
+						hEvent = *(HANDLE *)Buffer;
+						status = ObReferenceObjectByHandle(hEvent,
+														   SYNCHRONIZE,
+														   *ExEventObjectType,
+														   KernelMode,
+														   (PVOID *)&g_pEvent,
+														   &objHandleInfo);
+						if (!NT_SUCCESS(status))
+							g_pEvent = NULL;
+						Irp->IoStatus.Information = 0;
+						status = STATUS_SUCCESS;
+						DBGPRINT(("get g_Event:%p\n",g_pEvent));
+						
+						RtlInitUnicodeString(&EvtName,L"\\BaseNamedObjects\\s7fw_event");
+						g_kEvent = IoCreateSynchronizationEvent(&EvtName,&kEvent);
+						if (g_kEvent == NULL)
+							status = STATUS_ACCESS_DENIED;
+						break;
+					}
+				case IOCTL_GET_SHARE_ADDR:
+					{
+						PVOID UserAddr = MmMapLockedPages(g_pMdl,UserMode);
+						*((PVOID *)(Irp->AssociatedIrp.SystemBuffer)) = UserAddr;
+						break;
 					}
 					
 				case IOCTL_ADD_RULE:
@@ -468,6 +521,7 @@ PtUnload(
 // PassThru driver unload function
 //
 {
+	PETHREAD ethread;
     UNREFERENCED_PARAMETER(DriverObject);
     
     DBGPRINT(("PtUnload: entered\n"));
@@ -477,6 +531,14 @@ PtUnload(
     NdisIMDeregisterLayeredMiniport(DriverHandle);
     
     NdisFreeSpinLock(&GlobalLock);
+
+	IoFreeMdl(g_pMdl);
+	ExFreePoolWithTag(g_pSySAddr,PACKET_FILTER_TAG);
+
+	b_ExitThread = TRUE;
+	KeSetEvent(g_ExitEvent,0,FALSE);
+	if (PsLookupThreadByThreadId(g_LogClientId.UniqueThread,&ethread) == STATUS_SUCCESS)
+		KeWaitForSingleObject(ethread,SYNCHRONIZE,KernelMode,FALSE,NULL);
 
     DBGPRINT(("PtUnload: done!\n"));
 }
