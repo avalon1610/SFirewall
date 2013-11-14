@@ -12,6 +12,7 @@
 #include "sql.h"
 #include "comm.h"
 #include "../LoadSys/LoadSys.h"
+#include "html.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -214,12 +215,128 @@ static void process_command_line_arguments(char *argv[],char **options)
 	}
 }
 
+static const char *sql_error_msg = 
+"Sql Error ! check server output for more information.";
+
+#define DATA_SIZE 204800
+
+static int callback(void *param, int argc, char **argv, char **azColName)
+{
+	
+}
+
 static int event_handler(struct mg_event *event)
 {
-	if (event->type == MG_EVENT_LOG)
-		printf("%s\n",(const char *)event->event_param);
-	if (event->type == MG_HTTP_ERROR)
-		printf("HTTP ERROR:%d\n",(DWORD)event->event_param);
+	if (event->type == MG_REQUEST_BEGIN)
+	{
+		int post_data_len;
+		char post_data[1024] = {0};
+		char input_type[sizeof(post_data)] = {0};
+		char input_port[sizeof(post_data)] = {0};
+		char input_op[sizeof(post_data)] = {0};
+		if (!strcmp(event->request_info->uri,"/log"))
+		{
+			char **pResult;
+			int nRow,nCol;
+			char sql[128] = {"select * from log"};
+			char temp[64] = {0};
+			int addWhere = 0;
+			// User has submitted a form, show submitted data and a variable value
+			post_data_len = mg_read(event->conn,post_data,sizeof(post_data));
+
+			// Parse form data, input1 and input2 are guaranteed to be NUL-terminated
+			mg_get_var(post_data,post_data_len,"input_type",input_type,sizeof(input_type));
+			mg_get_var(post_data,post_data_len,"input_port",input_port,sizeof(input_port));
+			mg_get_var(post_data,post_data_len,"input_op",input_op,sizeof(input_op));
+			if (strcmp(input_type,"ALL"))
+			{
+				sprintf_s(temp,sizeof(temp)," where type='%s'",input_type),
+				strcat_s(sql,sizeof(sql),temp);
+				addWhere = true;
+			}
+			if (strlen(input_port))
+			{
+				sprintf_s(temp,sizeof(temp)," %s (src_port='%s' or dst_port='%s')",
+							addWhere?"and":"where",input_port,input_port);
+				strcat_s(sql,sizeof(sql),temp);
+			}
+
+			if (sql_query_sync(sql,&pResult,&nRow,&nCol))
+			{
+				int i,j,nIndex = nCol;
+				char *data = (char *)malloc(DATA_SIZE);
+				char header[128] = {0};
+				int data_len;
+				if (nCol == 0)
+				{
+					mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
+						"Content-Length: 9\r\n"
+						"Content-Type: text/html\r\n\r\nNo Record");
+					goto QUIT;
+				}
+				ZeroMemory(data,DATA_SIZE);
+				for(i=0; i<=nRow; i++)
+				{
+					if (i == 0)
+						strcat_s(data,DATA_SIZE,"<thead>");
+					strcat_s(data,DATA_SIZE,"<tr>");
+					for (j=0;j<nCol;j++)
+					{
+						if (i == 0)
+						{
+							if (j == 0)
+								strcat_s(data,DATA_SIZE,"<th>No.</th>");
+							sprintf_s(temp,sizeof(temp),"<th>%s</th>",pResult[j]);
+							strcat_s(data,DATA_SIZE,temp);
+							continue;
+						}
+
+						if (j == 0)
+						{
+							sprintf_s(temp,sizeof(temp),"<td>%d</td>",i);
+							strcat_s(data,DATA_SIZE,temp);
+						}
+						sprintf_s(temp,sizeof(temp),"<td>%s</td>",pResult[nIndex]);
+						strcat_s(data,DATA_SIZE,temp);
+						++nIndex;
+					}
+					strcat_s(data,DATA_SIZE,"</tr>");
+					if (i == 0)
+						strcat_s(data,DATA_SIZE,"</thead>");
+					
+				}
+
+				data_len = strlen(data);
+				sprintf_s(header,sizeof(header),"HTTP/1.0 200 OK\r\n"
+							"Content-Length: %d\r\n"
+							"Content-Type: text/html\r\n\r\n"
+							"<table border=\"1\">",data_len+26);
+
+				mg_printf(event->conn,"%s%s</table>\n",header,data);
+
+QUIT:
+				free(data);
+				return 0;
+			}
+			else
+			{
+				mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
+					"Content-Length: %d\r\n"
+					"Content-Type: text/html\r\n\r\n%s",
+					(int)strlen(sql_error_msg),sql_error_msg);
+			}
+		}
+		else
+		{
+			// Show HTML form
+			mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
+				"Content-Length: %d\r\n"
+				"Content-Type: text/html\r\n\r\n%s",
+				(int)strlen(html_form),html_form);
+		}
+
+		return 1; // Make event as processed
+	}
 	return 0;
 }
 
@@ -360,21 +477,25 @@ int main(int argc,char *argv[])
 	char path[MAX_PATH] = {0};
 	char name[32] = {0};
 	char msg[128] = {0};
-	
+	int error = 0;
 	//setup database
 	if (!sql_init("database.db"))
 		return EXIT_FAILURE;
 
-	// load driver
-	_getcwd(path,MAX_PATH);
-	strncat(path,"\\",1);
-	strncat(path,INF_NAME,strlen(INF_NAME));
-	strncat(path,".inf",4);
-	load_driver_inf(path);
-
 	// Communication with driver
-	setup_comm();
-
+	/*
+	while (!setup_comm(&error))
+	{
+		if (error == 1)
+			return EXIT_FAILURE;
+		// load driver
+		_getcwd(path,MAX_PATH);
+		strncat(path,"\\",1);
+		strncat(path,INF_NAME,strlen(INF_NAME));
+		strncat(path,".inf",4);
+		load_driver_inf(path);
+	}
+*/
 	// start web server
 	init_server_name();
 	start_mongoose(argc,argv);

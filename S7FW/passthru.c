@@ -105,10 +105,6 @@ Return Value:
 	HANDLE	exit_event_handle = NULL;
 	UNICODE_STRING evtname;
 
-	g_pSySAddr = ExAllocatePoolWithTag(NonPagedPool,LOG_BUFSIZE,PACKET_FILTER_TAG);
-	g_pMdl = IoAllocateMdl(g_pSySAddr,LOG_BUFSIZE,FALSE,FALSE,NULL);
-	MmBuildMdlForNonPagedPool(g_pMdl);
-
 	InitPktFltList();
 	InitLogRecord();
 
@@ -224,14 +220,11 @@ Return Value:
         NdisTerminateWrapper(NdisWrapperHandle, NULL);
     }
 
+	
 	RtlInitUnicodeString(&evtname,L"\\BaseNamedObjects\\exit_event");
 	g_ExitEvent = IoCreateSynchronizationEvent(&evtname,&exit_event_handle);
 	if (g_ExitEvent == NULL)
-		DBGPRINT(("IoCreateSynchronizationEvent g_ExitEvent failed:%08X\n",Status));
-
-	Status = PsCreateSystemThread(&g_LogThread,0,NULL,NULL,&g_LogClientId,(PKSTART_ROUTINE)PushLogWorkerThread,NULL);
-	if (!NT_SUCCESS(Status))
-		DBGPRINT(("Create PushLogWorkerThread failed:%08X\n",Status));
+		DBGPRINT(("IoCreateSynchronizationEvent g_ExitEvent failed"));
 
     return(Status);
 }
@@ -335,6 +328,40 @@ Return Value:
     return (Status);
 }
 
+void CleanUp()
+{
+	PETHREAD ethread;
+	b_ExitThread = TRUE;
+	KeSetEvent(g_ExitEvent,0,FALSE);
+	if (PsLookupThreadByThreadId(g_LogClientId.UniqueThread,&ethread) == STATUS_SUCCESS)
+	{
+		KeWaitForSingleObject(ethread,SYNCHRONIZE,KernelMode,FALSE,NULL);
+		if (g_kEvent)
+		{
+			ZwClose(g_kEvent);
+			g_kEvent = NULL;
+		}
+		if (g_pEvent)
+		{
+			ZwClose(g_pEvent);
+			g_pEvent = NULL;
+		}
+		if (g_pMdl)
+		{
+			IoFreeMdl(g_pMdl);
+			g_pMdl = NULL;
+		}
+		if (g_pSySAddr)
+		{
+			ExFreePoolWithTag(g_pSySAddr,PACKET_FILTER_TAG);
+			g_pSySAddr = NULL;
+		}
+	}
+	else
+	{
+		DBGPRINT(("Fatal Error, Worker Thread Lost Control!\n"));
+	}
+}
 
 NTSTATUS
 PtDispatch(
@@ -360,6 +387,7 @@ Return Value:
 {
     PIO_STACK_LOCATION  irpStack;
     NTSTATUS            status = STATUS_SUCCESS;
+	OBJECT_HANDLE_INFORMATION objHandleInfo;
 
     UNREFERENCED_PARAMETER(DeviceObject);
     
@@ -370,11 +398,18 @@ Return Value:
     switch (irpStack->MajorFunction)
     {
         case IRP_MJ_CREATE:
-            break;
+			{
+				TestPktFlt();
+				b_ExitThread = FALSE;
+				status = PsCreateSystemThread(&g_LogThread,0,NULL,NULL,&g_LogClientId,(PKSTART_ROUTINE)PushLogWorkerThread,NULL);
+				if (!NT_SUCCESS(status))
+					DBGPRINT(("Create PushLogWorkerThread failed:%08X\n",status));
+				break;
+			}
             
         case IRP_MJ_CLEANUP:
-            break;
-            
+			CleanUp();
+			break;
         case IRP_MJ_CLOSE:
             break;        
             
@@ -391,9 +426,7 @@ Return Value:
 				{
 				case IOCTL_SET_EVENT:
 					{
-						HANDLE				hEvent,kEvent;
-						OBJECT_HANDLE_INFORMATION objHandleInfo;
-						UNICODE_STRING EvtName;
+						HANDLE				hEvent;
 
 						if (Buffer == NULL || InputBufferLen < sizeof(HANDLE))
 						{
@@ -412,18 +445,43 @@ Return Value:
 							g_pEvent = NULL;
 						Irp->IoStatus.Information = 0;
 						status = STATUS_SUCCESS;
-						DBGPRINT(("get g_Event:%p\n",g_pEvent));
-						
-						RtlInitUnicodeString(&EvtName,L"\\BaseNamedObjects\\s7fw_event");
-						g_kEvent = IoCreateSynchronizationEvent(&EvtName,&kEvent);
-						if (g_kEvent == NULL)
-							status = STATUS_ACCESS_DENIED;
+						DBGPRINT(("get g_pEvent:%p\n",g_pEvent));
+						break;
+					}
+				case IOCTL_SET_EVENT_K:
+					{
+						HANDLE				kEvent;
+
+						if (Buffer == NULL || InputBufferLen < sizeof(HANDLE))
+						{
+							status = STATUS_INVALID_BUFFER_SIZE;
+							break;
+						}
+
+						kEvent = *(HANDLE *)Buffer;
+						status = ObReferenceObjectByHandle(kEvent,
+														   SYNCHRONIZE,
+														   *ExEventObjectType,
+														   KernelMode,
+														   (PVOID *)&g_kEvent,
+														   &objHandleInfo);
+						if (!NT_SUCCESS(status))
+							g_kEvent = NULL;
+						Irp->IoStatus.Information = 0;
+						status = STATUS_SUCCESS;
+						DBGPRINT(("get g_kEvent:%p\n",g_kEvent));
 						break;
 					}
 				case IOCTL_GET_SHARE_ADDR:
 					{
-						PVOID UserAddr = MmMapLockedPages(g_pMdl,UserMode);
+						PVOID UserAddr;
+						g_pSySAddr = ExAllocatePoolWithTag(NonPagedPool,LOG_BUFSIZE,PACKET_FILTER_TAG);
+						g_pMdl = IoAllocateMdl(g_pSySAddr,LOG_BUFSIZE,FALSE,FALSE,NULL);
+						MmBuildMdlForNonPagedPool(g_pMdl);
+						UserAddr = MmMapLockedPages(g_pMdl,UserMode);
 						*((PVOID *)(Irp->AssociatedIrp.SystemBuffer)) = UserAddr;
+						Irp->IoStatus.Information = sizeof(UserAddr);
+						DBGPRINT(("Share Memory addr in UserMode:%p\n",UserAddr));
 						break;
 					}
 					
@@ -521,7 +579,6 @@ PtUnload(
 // PassThru driver unload function
 //
 {
-	PETHREAD ethread;
     UNREFERENCED_PARAMETER(DriverObject);
     
     DBGPRINT(("PtUnload: entered\n"));
@@ -532,13 +589,12 @@ PtUnload(
     
     NdisFreeSpinLock(&GlobalLock);
 
-	IoFreeMdl(g_pMdl);
-	ExFreePoolWithTag(g_pSySAddr,PACKET_FILTER_TAG);
-
-	b_ExitThread = TRUE;
-	KeSetEvent(g_ExitEvent,0,FALSE);
-	if (PsLookupThreadByThreadId(g_LogClientId.UniqueThread,&ethread) == STATUS_SUCCESS)
-		KeWaitForSingleObject(ethread,SYNCHRONIZE,KernelMode,FALSE,NULL);
+	CleanUp();
+	if (g_ExitEvent)
+	{
+		ZwClose(g_ExitEvent);
+		g_ExitEvent = NULL;
+	}
 
     DBGPRINT(("PtUnload: done!\n"));
 }

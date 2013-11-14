@@ -15,9 +15,10 @@ NTSTATUS AddPktFltRule(PktFltRule *pkt_flt_item)
 {
 	KIRQL oldIrql;
 	PktFltEntry *pkt_flt_entry;
-	KeAcquireSpinLock(&pkt_flt_lock,&oldIrql);
 	PMGR_ALLOC_MEM(pkt_flt_entry,sizeof(PktFltEntry));
+	NdisZeroMemory(pkt_flt_entry,sizeof(PktFltEntry));
 	NdisMoveMemory(&pkt_flt_entry->pkt_flt_rule,pkt_flt_item,sizeof(PktFltRule));
+	KeAcquireSpinLock(&pkt_flt_lock,&oldIrql);
 	InsertHeadList(&pkt_flt_list,&pkt_flt_entry->next);
 	KeReleaseSpinLock(&pkt_flt_lock,oldIrql);
 	return STATUS_SUCCESS;
@@ -28,8 +29,9 @@ VOID TestPktFlt()
 {
 	PktFltRule pkt_flt_rule;
 	NdisZeroMemory(&pkt_flt_rule,sizeof(PktFltRule));
-	pkt_flt_rule.protocol = UDP_PROTOCOL;
+	pkt_flt_rule.protocol = TCP_PROTOCOL;
 	pkt_flt_rule.direction = PACKET_BOTH;
+	pkt_flt_rule.srcPort = 80;
 	AddPktFltRule(&pkt_flt_rule);
 }
 
@@ -153,31 +155,33 @@ VOID PMgrGetPktData(IN PNDIS_PACKET Packet,OUT PUCHAR pDst,IN ULONG length)
 PacketStatus IsPacketAllowed(UCHAR *srcIpAddr,UCHAR *dstIpAddr,USHORT srcPort,
 							 USHORT dstPort,USHORT protocol,PacketDirection direction)
 {
-	UNREFERENCED_PARAMETER(srcIpAddr);
-	UNREFERENCED_PARAMETER(dstIpAddr);
-	UNREFERENCED_PARAMETER(direction);
+	PktFltEntry *entry = NULL;
+	LIST_ENTRY *current = pkt_flt_list.Flink;
+	PktFltRule *rule;
 
-	if (protocol == UDP_PROTOCOL)
+	while(current != &pkt_flt_list)
 	{
-		if (srcPort == DHCP_SRC_PORT && dstPort == DHCP_DST_PORT)
-		{
-			DBGPRINT(("DHCP Protocol Packet Received\n"));
-			return PacketPass;
-		}
-
-		return PacketPass;
+		entry = CONTAINING_RECORD(current,PktFltEntry,next);
+		rule = &(entry->pkt_flt_rule);
+		if (((rule->srcIpAddr[0] == srcIpAddr[0] && 
+			rule->srcIpAddr[1] == srcIpAddr[1] && 
+			rule->srcIpAddr[2] == srcIpAddr[2] &&
+			rule->srcIpAddr[3] == srcIpAddr[3]) || 
+			rule->srcIpAddr[0] == '\0') &&
+			((rule->dstIpAddr[0] == dstIpAddr[0] && 
+			rule->dstIpAddr[1] == dstIpAddr[1] && 
+			rule->dstIpAddr[2] == dstIpAddr[2] &&
+			rule->dstIpAddr[3] == dstIpAddr[3]) || 
+			rule->dstIpAddr[0] == '\0') &&
+			(rule->srcPort == srcPort || rule->srcPort == 0) &&
+			(rule->dstPort == dstPort || rule->dstPort == 0) &&
+			(rule->protocol == protocol || rule->protocol == 0) &&
+			(rule->direction == PACKET_BOTH || rule->direction == direction || rule->direction == 0))	
+			return rule->status;
+		current = current->Flink;
 	}
-	else if (protocol == TCP_PROTOCOL)
-	{
-		if (dstPort == HTTP_PORT || srcPort == HTTP_PORT)
-		{
-			DBGPRINT(("Drop Tcp Packet 80\n"));
-			return PacketDrop;
-		}
 
-		return PacketPass;
-	}
-	else return PacketPass;
+	return PacketPass;
 }
 
 PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction)
@@ -196,8 +200,7 @@ PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction)
 	{
 		IPHeader * ipHeader = (IPHeader *)(packet_buf + sizeof(EtherHeader));
 		UCHAR *ipData;
-		DBGPRINT(("ip version %d\n",IP_VERSION(ipHeader->versionLen)));
-		DBGPRINT(("src ip %d.%d.%d.%d,dst ip %d,%d,%d,%d\n",
+		DBGPRINT(("ip version %d, src ip %d.%d.%d.%d,dst ip %d.%d.%d.%d\n",IP_VERSION(ipHeader->versionLen),
 			ipHeader->srcIpAddr[0],ipHeader->srcIpAddr[1],ipHeader->srcIpAddr[2],ipHeader->srcIpAddr[3],
 			ipHeader->dstIpAddr[0],ipHeader->dstIpAddr[1],ipHeader->dstIpAddr[2],ipHeader->dstIpAddr[3]));
 
@@ -210,8 +213,7 @@ PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction)
 			PacketRecord *record;
 			USHORT srcPort = ntoh(tcpHeader->srcPort);
 			USHORT dstPort = ntoh(tcpHeader->dstPort);
-			DBGPRINT(("Tcp Packet Received\n"));
-			DBGPRINT(("Src Port %d,Dst Port %d\n",ntoh(tcpHeader->srcPort),ntoh(tcpHeader->dstPort)));
+			DBGPRINT(("[TCP]Src Port %d,Dst Port %d\n",ntoh(tcpHeader->srcPort),ntoh(tcpHeader->dstPort)));
 			status = IsPacketAllowed(ipHeader->srcIpAddr,ipHeader->dstIpAddr,ntoh(tcpHeader->srcPort),
 				ntoh(tcpHeader->dstPort),TCP_PROTOCOL,direction);
 			
@@ -226,6 +228,7 @@ PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction)
 			NdisMoveMemory(&record->protocol,&ipHeader->protocol,1);
 			NdisMoveMemory(&record->srcPort,&srcPort,sizeof(USHORT));
 			NdisMoveMemory(&record->dstPort,&dstPort,sizeof(USHORT));
+			NdisMoveMemory(&record->status,&status,sizeof(status));
 			
 			LogRecord(record);
 
@@ -238,8 +241,7 @@ PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction)
 			PacketRecord *record;
 			USHORT srcPort = ntoh(udpHeader->srcPort);
 			USHORT dstPort = ntoh(udpHeader->dstPort);
-			DBGPRINT(("Udp Packet Received\n"));
-			DBGPRINT(("Src Port %d,Dst Port %d\n",ntoh(udpHeader->srcPort),ntoh(udpHeader->dstPort)));
+			DBGPRINT(("[UDP] Src Port %d,Dst Port %d\n",ntoh(udpHeader->srcPort),ntoh(udpHeader->dstPort)));
 			status = IsPacketAllowed(ipHeader->srcIpAddr,ipHeader->dstIpAddr,ntoh(udpHeader->srcPort),
 				ntoh(udpHeader->dstPort),UDP_PROTOCOL,direction);
 
@@ -254,6 +256,7 @@ PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction)
 			NdisMoveMemory(&record->protocol,&ipHeader->protocol,1);
 			NdisMoveMemory(&record->srcPort,&srcPort,sizeof(USHORT));
 			NdisMoveMemory(&record->dstPort,&dstPort,sizeof(USHORT));
+			NdisMoveMemory(&record->status,&status,sizeof(status));
 
 			LogRecord(record);
 			return status;
@@ -262,6 +265,7 @@ PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction)
 		else 
 		{
 			PacketRecord *record;
+			PacketStatus status = PacketPass;
 			DBGPRINT(("Other Packet Received\n"));
 			PMGR_ALLOC_MEM(record,sizeof(PacketRecord));
 			NdisZeroMemory(record,sizeof(PacketRecord));
@@ -269,23 +273,26 @@ PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction)
 			NdisMoveMemory(&record->srcMac[0],&etherHeader->srcMac[0],6);
 			NdisMoveMemory(&record->dstMac[0],&etherHeader->dstMac[0],6);
 			NdisMoveMemory(&record->etherType,&etherHeader->etherType,sizeof(USHORT));
+			NdisMoveMemory(&record->status,&status,sizeof(status));
 			
 			LogRecord(record);
-			return PacketPass;
+			return status;
 		}
 	}
 	else
 	{
 		PacketRecord *record;
+		PacketStatus status = PacketPass;
 		PMGR_ALLOC_MEM(record,sizeof(PacketRecord));
 		NdisZeroMemory(record,sizeof(PacketRecord));
 		record->dataLen = 0;
 		NdisMoveMemory(&record->srcMac[0],&etherHeader->srcMac[0],6);
 		NdisMoveMemory(&record->dstMac[0],&etherHeader->dstMac[0],6);
 		NdisMoveMemory(&record->etherType,&etherHeader->etherType,sizeof(USHORT));
+		NdisMoveMemory(&record->status,&status,sizeof(status));
 
 		LogRecord(record);
-		return PacketPass;
+		return status;
 	}
 
 	//return PacketPass;

@@ -201,6 +201,10 @@
 				>
 			</File>
 			<File
+				RelativePath=".\html.h"
+				>
+			</File>
+			<File
 				RelativePath=".\mongoose.h"
 				>
 			</File>

@@ -68,6 +68,7 @@ void WriteLogBuffer(PacketRecord *record)
 	ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
 	MUTEX_ACQUIRE(log_mutex);
 	ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+
 	while (nextLogBuf->Flink != &log_list)
 	{
 		nextLogBuf = nextLogBuf->Flink;
@@ -101,6 +102,9 @@ void WriteLogBuffer(PacketRecord *record)
 		MUTEX_RELEASE(log_mutex);
 		NewLogBuffer(record);
 	}
+
+	if (g_pEvent)
+		KeSetEvent(g_pEvent,0,FALSE);
 }
 
 // run at passive level
@@ -150,6 +154,7 @@ BOOLEAN GetFirstLog()
 		log = ((UCHAR *)log_buffer) + sizeof(LogBuffer);
 		log_len = log_buffer->len;
 
+		RtlZeroMemory(g_pSySAddr,LOG_BUFSIZE);
 		RtlCopyMemory(g_pSySAddr,log,log_len);
 
 		RemoveEntryList(log_entry);
@@ -160,6 +165,7 @@ BOOLEAN GetFirstLog()
 	else
 	{
 		MUTEX_RELEASE(log_mutex);
+		return FALSE;
 	}
 
 	return TRUE;
@@ -170,24 +176,22 @@ void PushLogWorkerThread(IN PVOID pContext)
 {
 	PKEVENT obj[2];
 	UNREFERENCED_PARAMETER(pContext);
-	if (g_pEvent == NULL || g_ExitEvent == NULL)
+	if (g_ExitEvent == NULL)
 		return;
 
 	while (TRUE)
 	{
-		if (g_pEvent == NULL)
+		if (g_pEvent == NULL || g_kEvent == NULL)
 			continue;
 		obj[0] = g_pEvent;
 		obj[1] = g_ExitEvent;
 		KeWaitForMultipleObjects(2,(PVOID *)&obj,WaitAny,SYNCHRONIZE,KernelMode,FALSE,NULL,NULL);
-		//KeWaitForSingleObject(g_pEvent,SYNCHRONIZE,KernelMode,FALSE,NULL);
 		if (b_ExitThread)
 			break;
 		if (g_pSySAddr && g_pEvent && g_kEvent)
 		{
-			GetFirstLog();
-			KeSetEvent(g_kEvent,0,FALSE);
-			KeResetEvent(g_pEvent);
+			if (GetFirstLog())
+				KeSetEvent(g_kEvent,0,FALSE);
 		}
 	}
 
