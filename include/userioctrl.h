@@ -37,6 +37,7 @@ typedef struct _PktFltRule
 	USHORT srcPort;
 	USHORT dstPort;
 	UCHAR protocol;
+	USHORT etherType;
 	PacketDirection direction;
 	PacketStatus status;
 } PktFltRule;
@@ -54,5 +55,15 @@ typedef struct _PacketRecord
 	UCHAR status;
 	ULONG dataLen;
 } PacketRecord;
+
+typedef struct _RULE
+{
+	char type[8];
+	char src_ip[16];
+	char dst_ip[16];
+	char src_port[8];
+	char dst_port[8];
+	char op[8];
+} RULE,*PRULE;
 
 #endif

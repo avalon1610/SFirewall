@@ -19,6 +19,14 @@ const char *create_table_log = "CREATE TABLE if not exists [log] (\
 								[status] VARCHAR2 NOT NULL,\
 								[time] TIMESTAMP NOT NULL DEFAULT (datetime('now','localtime')));";
 
+const char *create_table_rule = "CREATE TABLE if not exists [rule] (\
+								[type] VARCHAR2 NOT NULL,\
+								[src_ip] VARCHAR2,\
+								[dst_ip] VARCHAR2,\
+								[src_port] INTEGER NOT NULL,\
+								[dst_port] INTEGER NOT NULL,\
+								[operation] VARCHAR2 NOT NULL);";
+
 //const char *query_table_sql = "select count(*) from sqlite_master where table=[create_table_log];";
 
 int sql_init(const char *db_name)
@@ -34,7 +42,13 @@ int sql_init(const char *db_name)
 	
 	if (!sql_exec(create_table_log))
 	{
-		fprintf(stderr,"create table error:%s",zErrMsg);
+		fprintf(stderr,"create table log error:%s",zErrMsg);
+		return false;
+	}
+
+	if (!sql_exec(create_table_rule))
+	{
+		fprintf(stderr,"create table rule error:%s",zErrMsg);
 		return false;
 	}
 	return true;
@@ -89,7 +103,16 @@ int sql_exec(const char *sql)
 	return true;
 }
 
-void RecordToDB(PacketRecord *record)
+int RuleToDB(RULE rule)
+{
+	char sql[256] = {0};
+	sprintf_s(sql,sizeof(sql),"insert into rule (type,src_ip,dst_ip,src_port,dst_port,operation) values ('%s','%s','%s','%s','%s','%s')",
+		rule.type,strlen(rule.src_ip)?rule.src_ip:"*",strlen(rule.dst_ip)?rule.dst_ip:"*",strlen(rule.src_port)?rule.src_port:"*",
+		strlen(rule.dst_port)?rule.dst_port:"*",rule.op);
+	return sql_exec(sql);
+}
+
+void LogToDB(PacketRecord *record)
 {
 	char sql[256] = {0};
 	char type[8] = {0};

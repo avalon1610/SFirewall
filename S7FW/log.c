@@ -12,16 +12,9 @@ extern BOOLEAN b_ExitThread;
 
 void InitLogRecord()
 {
-	LogBuffer *log = (LogBuffer *)ALLOC_LOG_BUFFER();
-	log->len = 0;
 	KeInitializeEvent(&logging_event,SynchronizationEvent,FALSE);
-
 	InitializeListHead(&log_list);
 	MUTEX_INIT(log_mutex);
-
-	MUTEX_ACQUIRE(log_mutex);
-	InsertTailList(&log_list,&log->next);
-	MUTEX_RELEASE(log_mutex);
 }
 
 BOOLEAN IsLogBufferFull(LogBuffer *log_buffer,PacketRecord *record)

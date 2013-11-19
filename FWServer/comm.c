@@ -7,8 +7,10 @@
 HANDLE g_hEvent;
 PVOID g_ShareMem;
 HANDLE g_kEvent;
+HANDLE g_hFile;
 int bExit = 1;
-void RecordToDB(PacketRecord *record);
+void LogToDB(PacketRecord *record);
+int RuleToDB(RULE);
 
 DWORD __stdcall workthread(PVOID param)
 {
@@ -61,7 +63,7 @@ DWORD __stdcall workthread(PVOID param)
 					record->dstMac[0],record->dstMac[1],record->dstMac[2],record->dstMac[3],record->dstMac[4],record->dstMac[5]);
 			}
 			
-			RecordToDB(record);
+			LogToDB(record);
 			SetEvent(g_hEvent);
 		}
 		
@@ -74,8 +76,8 @@ int setup_comm(int *error)
 	DWORD RetBytes;
 	HANDLE m_hEvent,m_kEvent;
 	DWORD addr = 0;
-	HANDLE hFile = CreateFile("\\\\.\\s7fw",GENERIC_READ|GENERIC_WRITE,0,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
-	if (hFile == INVALID_HANDLE_VALUE)
+	g_hFile = CreateFile("\\\\.\\s7fw",GENERIC_READ|GENERIC_WRITE,0,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
+	if (g_hFile == INVALID_HANDLE_VALUE)
 	{
 		if (GetLastError() == ERROR_FILE_NOT_FOUND)
 			fprintf(stderr,"Installing driver...\n");
@@ -90,20 +92,20 @@ int setup_comm(int *error)
 	//Create event to be sent to kernel
 	m_hEvent = CreateEvent(NULL,FALSE,FALSE,NULL);
 	m_kEvent = CreateEvent(NULL,FALSE,FALSE,NULL);
-	if (!DeviceIoControl(hFile,IOCTL_SET_EVENT,&m_hEvent,sizeof(HANDLE),NULL,0,&RetBytes,NULL))
+	if (!DeviceIoControl(g_hFile,IOCTL_SET_EVENT,&m_hEvent,sizeof(HANDLE),NULL,0,&RetBytes,NULL))
 	{
 		fprintf(stderr,"Send Event 1 to kernel failed:%d\n",GetLastError());
 		goto FAIL_EXIT;
 	}
 
-	if (!DeviceIoControl(hFile,IOCTL_SET_EVENT_K,&m_kEvent,sizeof(HANDLE),NULL,0,&RetBytes,NULL))
+	if (!DeviceIoControl(g_hFile,IOCTL_SET_EVENT_K,&m_kEvent,sizeof(HANDLE),NULL,0,&RetBytes,NULL))
 	{
 		fprintf(stderr,"Send Event to 2 kernel failed:%d\n",GetLastError());
 		goto FAIL_EXIT;
 	}
 
 	// get shared memory from kernel
-	if (!DeviceIoControl(hFile,IOCTL_GET_SHARE_ADDR,NULL,0,&addr,sizeof(addr),&RetBytes,NULL))
+	if (!DeviceIoControl(g_hFile,IOCTL_GET_SHARE_ADDR,NULL,0,&addr,sizeof(addr),&RetBytes,NULL))
 	{
 		fprintf(stderr,"Get Shared Address failed:%d\n",GetLastError());
 		goto FAIL_EXIT;
@@ -128,9 +130,63 @@ int setup_comm(int *error)
 	return TRUE;
 
 FAIL_EXIT:
-	CloseHandle(hFile);
+	CloseHandle(g_hFile);
 	CloseHandle(m_hEvent);
 	CloseHandle(m_kEvent);
 	*error = 1;
 	return FALSE;
+}
+
+int DeliveryRule(RULE r)
+{
+	DWORD retBytes;
+	PktFltRule rule;
+	DWORD temp_ip;
+
+	ZeroMemory(&rule,sizeof(PktFltRule));
+	temp_ip = inet_addr(r.src_ip);
+	if (temp_ip != 0xffffffff)
+	{
+		rule.srcIpAddr[3] = LOBYTE((temp_ip & 0xff000000) >> 24);
+		rule.srcIpAddr[2] = LOBYTE((temp_ip & 0x00ff0000) >> 16);
+		rule.srcIpAddr[1] = LOBYTE((temp_ip & 0x0000ff00) >> 8);
+		rule.srcIpAddr[0] = LOBYTE((temp_ip & 0x000000ff) >> 0);
+	}
+	temp_ip = inet_addr(r.dst_ip);
+	if (temp_ip != 0xffffffff)
+	{
+		rule.dstIpAddr[3] = LOBYTE((temp_ip & 0xff000000) >> 24);
+		rule.dstIpAddr[2] = LOBYTE((temp_ip & 0x00ff0000) >> 16);
+		rule.dstIpAddr[1] = LOBYTE((temp_ip & 0x0000ff00) >> 8);
+		rule.dstIpAddr[0] = LOBYTE((temp_ip & 0x000000ff) >> 0);
+	}
+	if (!strcmp(r.type,"TCP"))
+		rule.protocol = TCP_PROTOCOL;
+	else if (!strcmp(r.type,"UDP"))
+		rule.protocol = UDP_PROTOCOL;
+	else if (!strcmp(r.type,"ICMP"))
+		rule.protocol = ICMP_PROTOCOL;
+	else if (!strcmp(r.type,"IP"))
+		rule.etherType = IP_TYPE;
+	else if (!strcmp(r.type,"ARP"))
+		rule.etherType = IP_TYPE;
+	else if (!strcmp(r.type,"RARP"))
+		rule.etherType = IP_TYPE;
+
+	if (!strcmp(r.op,"Pass"))
+		rule.status = PacketPass;
+	else if (!strcmp(r.op,"Denied"))
+		rule.status = PacketDrop;
+
+	rule.srcPort = atoi(r.src_port);
+	rule.dstPort = atoi(r.dst_port);
+
+	if (!DeviceIoControl(g_hFile,IOCTL_ADD_RULE,&rule,sizeof(rule),NULL,0,&retBytes,NULL))
+	{
+		fprintf(stderr,"Send rule to kernel failed:%d\n",GetLastError());
+		return KERNEL_COMM_ERROR;
+	}
+	if (!RuleToDB(r))
+		return SQL_ERROR;
+	return SUCCESS;
 }

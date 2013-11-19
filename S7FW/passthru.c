@@ -52,6 +52,7 @@ CLIENT_ID		g_LogClientId;
 PKEVENT			g_ExitEvent;
 BOOLEAN			b_ExitThread = FALSE;
 
+NTSTATUS AddPktFltRule(PktFltRule *pkt_flt_item);
 
 //
 // To support ioctls from user-mode:
@@ -399,7 +400,6 @@ Return Value:
     {
         case IRP_MJ_CREATE:
 			{
-				TestPktFlt();
 				b_ExitThread = FALSE;
 				status = PsCreateSystemThread(&g_LogThread,0,NULL,NULL,&g_LogClientId,(PKSTART_ROUTINE)PushLogWorkerThread,NULL);
 				if (!NT_SUCCESS(status))
@@ -486,7 +486,20 @@ Return Value:
 					}
 					
 				case IOCTL_ADD_RULE:
-					break;
+					{
+						PktFltRule rule;
+						if (Buffer == NULL || InputBufferLen < sizeof(PktFltRule))
+						{
+							status = STATUS_INVALID_BUFFER_SIZE;
+							break;
+						}
+
+						rule = *(PktFltRule *)Buffer;
+						AddPktFltRule(&rule);
+						Irp->IoStatus.Information = 0;
+						DBGPRINT(("Add Rule %p\n",&rule))
+						break;
+					}
 				}
 			}
 

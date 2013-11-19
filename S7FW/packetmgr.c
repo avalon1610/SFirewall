@@ -24,17 +24,6 @@ NTSTATUS AddPktFltRule(PktFltRule *pkt_flt_item)
 	return STATUS_SUCCESS;
 }
 
-// deny all udp
-VOID TestPktFlt()
-{
-	PktFltRule pkt_flt_rule;
-	NdisZeroMemory(&pkt_flt_rule,sizeof(PktFltRule));
-	pkt_flt_rule.protocol = TCP_PROTOCOL;
-	pkt_flt_rule.direction = PACKET_BOTH;
-	pkt_flt_rule.srcPort = 80;
-	AddPktFltRule(&pkt_flt_rule);
-}
-
 USHORT ntoh(USHORT us)
 {
 	UCHAR ch[2];
