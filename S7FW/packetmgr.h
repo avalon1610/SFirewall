@@ -85,11 +85,13 @@ typedef struct PktFltEntry
 PacketStatus FilterPacket(PUCHAR packet_buf,ULONG len,PacketDirection direction);
 UCHAR *PMgrGetIpData(IPHeader *ipHeader);
 UCHAR *PMgrGetTcpData(TCPHeader *tcpHeader);
+UCHAR *PMgrGetUdpData(UDPHeader *udpHeader);
 VOID PMgrGetPktData(IN PNDIS_PACKET Packet,OUT PUCHAR pDst,IN ULONG length);
 VOID PMgrFreeRecvPkt(IN PADAPT pAdaptContext,IN PNDIS_PACKET pNdisPacket);
 PNDIS_PACKET PMgrAllocRecvPkt(IN PADAPT pAdaptContext,IN UINT DataLength,OUT PUCHAR * ppDataBuffer);
 VOID InitPktFltList();
 VOID TestPktFlt();
+
 #define IP_VERSION(versionLen) (((versionLen)&(0xF0))>>4)
 #define IP_HEADERLEN(versionLen) (versionLen)&(0x0F)
 #define TCP_HEADERLEN(rsvLen) (((rsvLen)&(0xF0))>>4)

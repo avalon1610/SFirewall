@@ -365,7 +365,7 @@ Return Value:
 
 		Status = NDIS_STATUS_SUCCESS;
 
-		if (packet_status == PacketPass)
+		if (packet_status != PacketDrop)
 			NdisSend(&Status,
 					 pAdapt->BindingHandle,
 					 MyPacket);
@@ -580,7 +580,7 @@ Return Value:
 
 				Status = NDIS_STATUS_SUCCESS;
 
-				if (packet_status == PacketPass)
+				if (packet_status != PacketDrop)
 					NdisSend(&Status,
 							 pAdapt->BindingHandle,
 							 MyPacket);

@@ -53,6 +53,7 @@ PKEVENT			g_ExitEvent;
 BOOLEAN			b_ExitThread = FALSE;
 
 NTSTATUS AddPktFltRule(PktFltRule *pkt_flt_item);
+NTSTATUS RemovePktFltRule(PktFltRule *pkt_flt_item);
 
 //
 // To support ioctls from user-mode:
@@ -392,7 +393,7 @@ Return Value:
 
     UNREFERENCED_PARAMETER(DeviceObject);
     
-    DBGPRINT(("==>Pt Dispatch\n"));
+    //DBGPRINT(("==>Pt Dispatch\n"));
     irpStack = IoGetCurrentIrpStackLocation(Irp);
       
 
@@ -485,7 +486,7 @@ Return Value:
 						break;
 					}
 					
-				case IOCTL_ADD_RULE:
+				case IOCTL_MANAGE_RULE:
 					{
 						PktFltRule rule;
 						if (Buffer == NULL || InputBufferLen < sizeof(PktFltRule))
@@ -495,11 +496,29 @@ Return Value:
 						}
 
 						rule = *(PktFltRule *)Buffer;
-						AddPktFltRule(&rule);
+						if (rule.manage == ADD_RULE)
+						{
+							AddPktFltRule(&rule);
+							DBGPRINT(("Add Rule %p\n",&rule))
+						}
+						else if (rule.manage == REMOVE_RULE)
+						{
+							RemovePktFltRule(&rule);
+							DBGPRINT(("Remove Rule %p\n",&rule));
+						}
+						else
+						{
+							status = STATUS_INVALID_PARAMETER;
+							DBGPRINT(("Invalid PktFltRule Manage Type.\n"));
+						}	
+
 						Irp->IoStatus.Information = 0;
-						DBGPRINT(("Add Rule %p\n",&rule))
 						break;
 					}
+				default:
+					status = STATUS_INVALID_DEVICE_REQUEST;
+					Irp->IoStatus.Information = 0;
+					break;
 				}
 			}
 
@@ -511,7 +530,7 @@ Return Value:
     Irp->IoStatus.Status = status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
-    DBGPRINT(("<== Pt Dispatch\n"));
+    //DBGPRINT(("<== Pt Dispatch\n"));
 
     return status;
 

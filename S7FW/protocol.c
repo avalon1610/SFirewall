@@ -927,7 +927,7 @@ Return Value:
 			// get data, filter
 			status = FilterPacket(pDataBuffer,length,PACKET_IN);
 
-			if (status == PacketPass)
+			if (status != PacketDrop)
 			{
 				NdisMIndicateReceivePacket(pAdapt->MiniportHandle,&Packet,1);
 			}
@@ -1085,7 +1085,7 @@ Return Value:
                 // returns.
                 //
 
-                if (pAdapt->MiniportHandle != NULL && packet_status == PacketPass)
+                if (pAdapt->MiniportHandle != NULL && packet_status != PacketDrop)
                 {
                     NdisMIndicateReceivePacket(pAdapt->MiniportHandle, &MyPacket, 1);
                 }
@@ -1123,7 +1123,7 @@ Return Value:
 					status = FilterPacket(pDataBuffer,totalSize,PACKET_IN);
 					NDIS_SET_PACKET_STATUS(MyPacket,NDIS_STATUS_RESOURCES);
 					NDIS_SET_PACKET_HEADER_SIZE(MyPacket,HeaderBufferSize);
-					if (status == PacketPass)
+					if (status != PacketDrop)
 					{
 						if (pAdapt->MiniportHandle != NULL)
 							NdisMIndicateReceivePacket(pAdapt->MiniportHandle,&MyPacket,1);
@@ -1395,7 +1395,7 @@ Return Value:
 			PMGR_FREE_MEM(pDataBuffer);
 		}
 
-        if (pAdapt->MiniportHandle != NULL && packet_status == PacketPass)
+        if (pAdapt->MiniportHandle != NULL && packet_status != PacketDrop)
         {
             NdisMIndicateReceivePacket(pAdapt->MiniportHandle, &MyPacket, 1);
         }

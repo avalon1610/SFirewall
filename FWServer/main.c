@@ -13,6 +13,8 @@
 #include <direct.h>
 #include <winsvc.h>
 #include <ShlObj.h>
+#include <time.h>
+#include <assert.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX MAX_PATH
@@ -31,11 +33,10 @@
 #endif
 
 #include "mongoose.h"
-#include "sql.h"
 #include "comm.h"
 #include "../LoadSys/LoadSys.h"
-#include "html.h"
-#include "../include/userioctrl.h"
+#include "curl/curl.h"
+#include "sql.h"
 
 #define MAX_OPTIONS 40
 #define MAX_CONF_FILE_LINE_SIZE (8 * 1024)
@@ -44,10 +45,304 @@ static int exit_flag;
 static char server_name[40];		// Set by init_server_name()
 static char config_file[PATH_MAX];	// Set by process_command_line_arguments()
 static struct mg_context *ctx;		// Set by start_mongoose()
+extern CURL *curl;
+extern char g_ip[16];
+
+static CRITICAL_SECTION g_cs;	// Permits exclusive access to other members
+static HANDLE g_hsemReaders;	// Readers wait on this if a writer has access
+static HANDLE g_hsemWriters;	// Writers wait on this if a reader has access
+static int g_nWaitingReaders;	// Number of readers waiting for access
+static int g_nWaitingWriters;	// Number of writers waiting for access
+static int g_nActive;			// Number of threads currently with access
 
 #if !defined(CONFIG_FILE)
 #define CONFIG_FILE "mongoose.conf"
 #endif
+#define MAX_USER_LEN 20
+#define MAX_SESSIONS 1
+#define SESSION_TTL 120
+static const char *authorize_url = "/authorize";
+static const char *login_url = "/login.html";
+int post_handler(struct mg_event *event);
+
+// Describes web session
+struct session {
+	char session_id[33];	// Session ID, must be unique
+	char random[20];		// Random data used for extra user validation
+	char user[MAX_USER_LEN];// Authenticated user
+	time_t expire;			// Expiration timestamp, UTC
+};
+
+static struct session sessions[MAX_SESSIONS];	//Current sessions
+
+void init_rwlock()
+{
+	// Initially no readers want access,no writers want access,
+	// and no threads are accessing the resource
+	g_nWaitingWriters = g_nWaitingReaders = g_nActive = 0;
+	g_hsemWriters = CreateSemaphore(NULL,0,MAXLONG,NULL);
+	g_hsemReaders = CreateSemaphore(NULL,0,MAXLONG,NULL);
+	InitializeCriticalSection(&g_cs);
+}
+
+void rwlock_rdlock()
+{
+	BOOL fResourceWritePending;
+	// Ensure exclusive access to the member variables
+	EnterCriticalSection(&g_cs);
+
+	// Are there writers waiting or is a writer writing
+	fResourceWritePending = (g_nWaitingWriters || (g_nActive < 0));
+	if (fResourceWritePending)
+	{
+		// This reader must wait, increment the count of waiting readers
+		g_nWaitingReaders++;
+	}
+	else
+	{
+		// This reader can read, increment the count of active readers
+		g_nActive++;
+	}
+
+	// Allow other threads to attempt reading/writing
+	LeaveCriticalSection(&g_cs);
+
+	if (fResourceWritePending)
+	{
+		// This thread must wait
+		WaitForSingleObject(g_hsemReaders,INFINITE);
+	}
+}
+
+void rwlock_wrlock()
+{
+	BOOL fResourceOwned;
+
+	// Ensure exclusive access to the member variables
+	EnterCriticalSection(&g_cs);
+
+	// Are there any threads accessing the resource
+	fResourceOwned = (g_nActive != 0);
+
+	if (fResourceOwned)
+	{
+		// This writer must wait,increment the count of waiting writers
+		g_nWaitingWriters++;
+	}
+	else
+	{
+		// This writer can writer, decrement the count of active writers
+		g_nActive = -1;
+	}
+
+	// Allow other threads to attempt reading/writing
+	LeaveCriticalSection(&g_cs);
+
+	if (fResourceOwned)
+	{
+		// This thread must wait
+		WaitForSingleObject(g_hsemWriters,INFINITE);
+	}
+}
+
+void rwlock_unlock()
+{
+	HANDLE hsem;
+	LONG lCount;
+	// Ensure exclusive access to the member variables
+	EnterCriticalSection(&g_cs);
+
+	if (g_nActive > 0)
+	{
+		// Readers have control so a reader must be done
+		g_nActive--;
+	}
+	else
+	{
+		// Writers have control so a writer must be done
+		g_nActive++;
+	}
+
+	hsem = NULL;	// Assume no thread are waiting
+	lCount = 1;		// Assume only 1 waiter wakes, always true for writers
+
+	if (g_nActive == 0)
+	{
+		// It is possible  that readers could never get access
+		// if there are always writers wanting to write
+		if (g_nWaitingWriters > 0)
+		{
+			// Writers are waiting and they take priority over readers
+			g_nActive = -1;			// A writer will get access
+			g_nWaitingWriters--;	// One less writer will be waiting
+			hsem = g_hsemWriters;	// Writers wait on this semaphore
+			// The semaphore will release only 1 writer thread
+		}
+		else if (g_nWaitingWriters > 0)
+		{
+			// Readers are waiting and no writers are waiting
+			g_nActive = g_nWaitingReaders;	// All readers will get access
+			g_nWaitingReaders = 0;			// No readers will be waiting
+			hsem = g_hsemReaders;			// Readers wait on this semaphore
+			lCount = g_nActive;				// Semaphore releases all readers
+		}
+		else
+		{
+			// There are no threads waiting at all, no semaphore gets released
+		}
+	}
+
+	// Allow other threads to attempt reading/writing
+	LeaveCriticalSection(&g_cs);
+
+	if (hsem != NULL)
+	{
+		// Some threads are to be released
+		ReleaseSemaphore(hsem,lCount,NULL);
+	}
+}
+
+static struct session *get_session(const struct mg_connection *conn)
+{
+	int i;
+	const char *cookie = mg_get_header(conn,"Cookie");
+	char session_id[33];
+	time_t now = time(NULL);
+	mg_get_cookie(cookie,"session",session_id,sizeof(session_id));
+	for (i = 0; i < MAX_SESSIONS; i++)
+	{
+		if (sessions[i].expire != 0 &&
+			sessions[i].expire > now &&
+			strcmp(sessions[i].session_id,session_id) == 0)
+		{
+			break;
+		}
+	}
+	return i == MAX_SESSIONS ? NULL : &sessions[i];
+}
+
+static void generate_session_id(char *buf,const char *random,const char *user)
+{
+	mg_md5(buf,random,user,NULL);
+}
+
+// Return 1 if request is authorized,0 otherwise
+static int is_authorized(const struct mg_connection *conn,
+						 const struct mg_request_info *request_info)
+{
+	struct session *session;
+	char valid_id[33];
+	int authorized = 0;
+
+	// Always authorize accesses to login page and to authorize URI
+	if (!strcmp(request_info->uri,login_url) ||
+		!strcmp(request_info->uri,authorize_url))
+		return 1;
+
+	rwlock_rdlock();
+	if ((session = get_session(conn)) != NULL)
+	{
+		generate_session_id(valid_id,session->random,session->user);
+		if (strcmp(valid_id,session->session_id) == 0)
+		{
+			session->expire = time(0) + SESSION_TTL;
+			authorized = 1;
+		}
+	}
+	rwlock_unlock();
+	return authorized;
+}
+
+static void redirect_to_login(struct mg_connection *conn,
+							  const struct mg_request_info *request_info)
+{
+	mg_printf(conn,"HTTP/1.1 302 Found\r\n"
+		"Set-Cookie: original_url=%s\r\n"
+		"Location: %s\r\n\r\n",
+		request_info->uri,login_url);
+}
+
+static void redirect_to_url(struct mg_connection *conn,
+							const char *jump_url,
+							const char *msg)
+{
+	char code[256] = {0};
+	sprintf_s(code,sizeof(code),"<script>alert('%s');location.href='%s';</script>",msg,jump_url);
+	mg_printf(conn,"HTTP/1.0 200 OK\r\n"
+		"Content-Length: %d\r\n"
+		"Content-Type: text/html\r\n\r\n%s",
+		(int)strlen(code),code);
+}
+
+// Return 1 if username/password is allowed, 0 otherwise.
+static int check_password(const char *user,const char *password)
+{
+	return (strcmp(password,"cc")||strcmp(user,"cc")) ? 0 : 1;
+}
+
+// Allocate new session object
+static struct session *new_session(void)
+{
+	int i;
+	time_t now = time(NULL);
+	rwlock_wrlock();
+	for (i = 0; i < MAX_SESSIONS; i++)
+	{
+		if (sessions[i].expire == 0 || sessions[i].expire < now)
+		{
+			sessions[i].expire = time(0) + SESSION_TTL;
+			break;
+		}
+	}
+	rwlock_unlock();
+	return i == MAX_SESSIONS ? NULL : &sessions[i];
+}
+
+static void get_qsvar(const struct mg_request_info *request_info,
+					  const char *name,char *dst,size_t dst_len)
+{
+	const char *qs = request_info->query_string;
+	mg_get_var(qs,strlen(qs == NULL ? "" : qs),name,dst,dst_len);
+}
+
+static void my_strlcpy(char *dst,const char *src,size_t len)
+{
+	strncpy(dst,src,len);
+	dst[len - 1] = '\0';
+}
+
+static void authorize(struct mg_connection *conn,
+					  const struct mg_request_info *request_info)
+{
+	char user[MAX_USER_LEN],password[MAX_USER_LEN];
+	struct session *session;
+	get_qsvar(request_info,"user",user,sizeof(user));
+	get_qsvar(request_info,"password",password,sizeof(password));
+
+	if (check_password(user,password) && (session = new_session()) != NULL)
+	{
+		// Authentication success:
+		// 1. create new session
+		// 2. set session ID token in the cookie
+		// 3. remove original_url from the cookie - not needed anymore
+		// 4. redirect client back to the original URL
+		my_strlcpy(session->user,user,sizeof(session->user));
+		snprintf(session->random,sizeof(session->random),"%d",rand());
+		generate_session_id(session->session_id,session->random,session->user);
+		mg_printf(conn,"HTTP/1.1 302 Found\r\n"
+			"Set-Cookie: session=%s; max-age=3600; http-only\r\n"	// Session ID
+			"Set-Cookie: user=%s\r\n"	// Set user,needed by Javascript code
+			"Set-Cookie: original_url=/; max-age=0\r\n"		// Delete original_url
+			"Location: /\r\n\r\n",
+			session->session_id,session->user);
+	}
+	else
+	{
+		// Authentication failure, redirect to login
+		const char *alert_msg = "Invalid username or password.";
+		redirect_to_url(conn,login_url,alert_msg);
+	}
+}
 
 static void init_server_name(void) 
 {
@@ -216,242 +511,24 @@ static void process_command_line_arguments(char *argv[],char **options)
 	}
 }
 
-static const char *sql_error_msg = 
-"Sql Error ! check server output for more information.";
-static const char *kernel_error_msg = 
-"FATAL ERROR! Communicate with the kernel has failed.";
-static const char *ip_error_msg = 
-"<script>alert('Invalid IP');window.history.back(-1);</script>";
-
-#define DATA_SIZE 204800
-int DeliveryRule(RULE r);
-
-void HandleSQLData(char *data,int data_size,int nRow,int nCol,char **pResult)
-{
-	char temp[64] = {0};
-	int i,j,nIndex;
-	nIndex = nCol;
-	for(i=0; i<=nRow; i++)
-	{
-		if (i == 0)
-			strcat_s(data,data_size,"<thead>");
-		strcat_s(data,data_size,"<tr>");
-		for (j=0;j<nCol;j++)
-		{
-			if (i == 0)
-			{
-				if (j == 0)
-					strcat_s(data,data_size,"<th>No.</th>");
-				sprintf_s(temp,sizeof(temp),"<th>%s</th>",pResult[j]);
-				strcat_s(data,data_size,temp);
-				continue;
-			}
-
-			if (j == 0)
-			{
-				sprintf_s(temp,sizeof(temp),"<td>%d</td>",i);
-				strcat_s(data,data_size,temp);
-			}
-			sprintf_s(temp,sizeof(temp),"<td>%s</td>",pResult[nIndex]);
-			strcat_s(data,data_size,temp);
-			++nIndex;
-		}
-		strcat_s(data,data_size,"</tr>");
-		if (i == 0)
-			strcat_s(data,data_size,"</thead>");
-	}
-}
-
 static int event_handler(struct mg_event *event)
 {
-	if (event->type == MG_REQUEST_BEGIN)
-	{
-		int post_data_len;
-		char post_data[1024] = {0};
-		char input_type[sizeof(post_data)] = {0};
-		char input_src_port[sizeof(post_data)] = {0};
-		char input_dst_port[sizeof(post_data)] = {0};
-		char input_op[sizeof(post_data)] = {0};
-		char input_src_ip[sizeof(post_data)] = {0};
-		char input_dst_ip[sizeof(post_data)] = {0};
-		if (!strcmp(event->request_info->uri,"/log"))
-		{
-			char **pResult;
-			int nRow,nCol,i;
-			char sql[1024] = {"select * from log"};
-			char temp[64] = {0};
-			char condition[6][sizeof(temp)] = {0};
-			int first = 1;
-			// User has submitted a form, show submitted data and a variable value
-			post_data_len = mg_read(event->conn,post_data,sizeof(post_data));
+	int result = 1;
+	struct mg_request_info *request_info = event->request_info;
+	struct mg_connection *conn = event->conn;
 
-			// Parse form data, input1 and input2 are guaranteed to be NUL-terminated
-			mg_get_var(post_data,post_data_len,"input_type",input_type,sizeof(input_type));
-			mg_get_var(post_data,post_data_len,"input_src_port",input_src_port,sizeof(input_src_port));
-			mg_get_var(post_data,post_data_len,"input_dst_port",input_dst_port,sizeof(input_dst_port));
-			mg_get_var(post_data,post_data_len,"input_op",input_op,sizeof(input_op));
-			mg_get_var(post_data,post_data_len,"input_src_ip",input_src_ip,sizeof(input_src_ip));
-			mg_get_var(post_data,post_data_len,"input_dst_ip",input_dst_ip,sizeof(input_dst_ip));
-			if (strcmp(input_type,"ALL"))
-			{
-				sprintf_s(temp,sizeof(temp),"(type='%s')",input_type);
-				strcpy_s(condition[0],sizeof(temp),temp);
-			}
-			if (strlen(input_src_ip))
-			{
-				sprintf_s(temp,sizeof(temp),"(src_ip='%s')",input_src_ip);
-				strcpy_s(condition[1],sizeof(temp),temp);
-			}
-			if (strlen(input_dst_ip))
-			{
-				sprintf_s(temp,sizeof(temp),"(dst_ip='%s')",input_dst_ip);
-				strcpy_s(condition[1],sizeof(temp),temp);
-			}
-			if (strlen(input_src_port))
-			{
-				sprintf_s(temp,sizeof(temp),"(src_port='%s')",input_src_port);
-				strcpy_s(condition[2],sizeof(temp),temp);
-			}
-			if (strlen(input_dst_port))
-			{
-				sprintf_s(temp,sizeof(temp),"(dst_port='%s')",input_dst_port);
-				strcpy_s(condition[2],sizeof(temp),temp);
-			}
-			if (strcmp(input_op,"ALL"))
-			{
-				sprintf_s(temp,sizeof(temp),"(status='%s')",input_op);
-				strcpy_s(condition[3],sizeof(temp),temp);
-			}
-
-			for(i = 0;i < sizeof(condition)/sizeof(temp); ++i)
-			{
-				if (condition[i][0] == '\0')
-					continue;
-				else
-				{
-					if (first)
-					{
-						strcat_s(sql,sizeof(sql)," where ");
-						strcat_s(sql,sizeof(sql),condition[i]);
-						first = 0;
-					}
-					else
-					{
-						strcat_s(sql,sizeof(sql)," and ");
-						strcat_s(sql,sizeof(sql),condition[i]);
-					}
-				}
-			}
-
-			if (sql_query_sync(sql,&pResult,&nRow,&nCol))
-			{
-				char *data = (char *)malloc(DATA_SIZE);
-				char header[128] = {0};
-				int data_len;
-				if (nCol == 0)
-				{
-					mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
-						"Content-Length: 9\r\n"
-						"Content-Type: text/html\r\n\r\nNo Record");
-					goto QUIT;
-				}
-				ZeroMemory(data,DATA_SIZE);
-				HandleSQLData(data,DATA_SIZE,nRow,nCol,pResult);
-				data_len = strlen(data);
-				sprintf_s(header,sizeof(header),"HTTP/1.0 200 OK\r\n"
-							"Content-Length: %d\r\n"
-							"Content-Type: text/html\r\n\r\n"
-							"<table border=\"1\">",data_len+26);
-
-				mg_printf(event->conn,"%s%s</table>\n",header,data);
-
-QUIT:
-				free(data);
-			}
-			else
-			{
-				mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
-					"Content-Length: %d\r\n"
-					"Content-Type: text/html\r\n\r\n%s",
-					(int)strlen(sql_error_msg),sql_error_msg);
-			}
-		}
-		else if (!strcmp(event->request_info->uri,"/rule"))
-		{
-			RULE rule;
-			int status = SUCCESS;
-			// User has submitted a form, show submitted data and a variable value
-			post_data_len = mg_read(event->conn,post_data,sizeof(post_data));
-
-			if (post_data_len != 0)
-			{
-				// Parse form data, input1 and input2 are guaranteed to be NUL-terminated
-				mg_get_var(post_data,post_data_len,"input_type",input_type,sizeof(input_type));
-				mg_get_var(post_data,post_data_len,"input_src_port",input_src_port,sizeof(input_src_port));
-				mg_get_var(post_data,post_data_len,"input_dst_port",input_dst_port,sizeof(input_dst_port));
-				mg_get_var(post_data,post_data_len,"input_op",input_op,sizeof(input_op));
-				mg_get_var(post_data,post_data_len,"input_src_ip",input_src_ip,sizeof(input_src_ip));
-				mg_get_var(post_data,post_data_len,"input_dst_ip",input_dst_ip,sizeof(input_dst_ip));
-				
-				ZeroMemory(&rule,sizeof(RULE));
-				strcpy_s(rule.type,sizeof(rule.type),input_type);
-				strcpy_s(rule.src_ip,sizeof(rule.src_ip),input_src_ip);
-				strcpy_s(rule.dst_ip,sizeof(rule.dst_ip),input_dst_ip);
-				strcpy_s(rule.src_port,sizeof(rule.src_port),input_src_port);
-				strcpy_s(rule.dst_port,sizeof(rule.dst_port),input_dst_port);
-				strcpy_s(rule.op,sizeof(rule.op),input_op);
-				status = DeliveryRule(rule);
-			}
-			
-			if (status == SUCCESS)
-			{
-				char **pResult;
-				int nRow,nCol;
-				char *data = (char *)malloc(DATA_SIZE/100);
-				char header[128] = {0};
-				int data_len;
-				char sql[32] = {"select * from rule;"};
-				if (sql_query_sync(sql,&pResult,&nRow,&nCol))
-				{
-					ZeroMemory(data,DATA_SIZE/100);
-					HandleSQLData(data,DATA_SIZE/100,nRow,nCol,pResult);
-					data_len = strlen(data);
-					sprintf_s(header,sizeof(header),"HTTP/1.0 200 OK\r\n"
-						"Content-Length: %d\r\n"
-						"Content-Type: text/html\r\n\r\n"
-						"<table border=\"1\">",data_len+26);
-
-					mg_printf(event->conn,"%s%s</table>\n",header,data);
-				}
-				free(data);
-			}
-			else
-			{
-				if (status == SQL_ERROR)
-					mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
-						"Content-Length: %d\r\n"
-						"Content-Type: text/html\r\n\r\n%s",
-						(int)strlen(sql_error_msg),sql_error_msg);
-				else if (status == KERNEL_COMM_ERROR)
-					mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
-						"Content-Length: %d\r\n"
-						"Content-Type: text/html\r\n\r\n%s",
-						(int)strlen(kernel_error_msg),kernel_error_msg);
-			}
-		}	
-		else
-		{
-			// Show HTML form
-			mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
-				"Content-Length: %d\r\n"
-				"Content-Type: text/html\r\n\r\n%s",
-				(int)strlen(html_form),html_form);
-		}
-
-		return 1; // Make event as processed
-	}
-
-	return 0;
+	if (event->type != MG_REQUEST_BEGIN)
+		return 0;
+	
+	if (!is_authorized(conn,request_info))
+		redirect_to_login(conn,request_info);
+	else if (strcmp(request_info->uri,authorize_url) == 0)
+		authorize(conn,request_info);
+	else if (strstr(request_info->uri,".") == NULL)
+		post_handler(event);
+	else
+		result = 0;
+	return result;
 }
 
 static int is_path_absolute(const char *path)
@@ -539,7 +616,7 @@ static void start_mongoose(int argc,char *argv[])
 	}
 
 	options[0] = NULL;
-	set_option(options,"document_root",".");
+	set_option(options,"document_root","./web");
 
 	// Update config based on command line arguments
 	process_command_line_arguments(argv,options);
@@ -575,14 +652,76 @@ static void start_mongoose(int argc,char *argv[])
 	}
 }
 
-void wait()
+int setup_rule()
 {
-	MSG msg;
-	while (GetMessageA(&msg,NULL,0,0))
-	{
-		TranslateMessage(&msg);
-		DispatchMessageA(&msg);
+	char sql[256] = {0};
+	char **azResult;
+	int nRow,nColumn,i,nIndex=0;
+	RULE rule;
+	sprintf_s(sql,sizeof(sql),"select rowid,* from rule;");
+	if (sql_query_sync(sql,&azResult,&nRow,&nColumn))
+	{	
+		for (i = 0;i <= nRow; ++i)
+		{	
+			if (i == 0)
+			{
+				nIndex+=11;
+				continue;
+			}
+			
+			ZeroMemory(&rule,sizeof(RULE));
+			rule.index = atoi(azResult[nIndex++]);
+			strcpy_s(rule.name,sizeof(rule.name),azResult[nIndex++]);	
+			strcpy_s(rule.type,sizeof(rule.type),azResult[nIndex++]);
+			strcpy_s(rule.src_ip,sizeof(rule.src_ip),azResult[nIndex++]);
+			strcpy_s(rule.dst_ip,sizeof(rule.dst_ip),azResult[nIndex++]);
+			rule.src_port = atoi(azResult[nIndex++]);
+			rule.dst_port = atoi(azResult[nIndex++]);
+			strcpy_s(rule.data.pi,sizeof(rule.data.pi),azResult[nIndex++]);
+			rule.data.pos = atoi(azResult[nIndex++]);
+			rule.data.len = atoi(azResult[nIndex++]);
+			strcpy_s(rule.op,sizeof(rule.op),azResult[nIndex++]);
+			if (SUCCESS == DeliveryRule(rule,true,false))
+				printf("Loading Rules from Database...%d\n",i);
+			else
+			{
+				printf("Loading rules error!\n");
+				break;
+			}
+			
+		}
+		return nRow;
 	}
+	return 0;
+}
+
+BOOL WINAPI ConsoleHandler(DWORD CEvent)
+{
+	switch (CEvent)
+	{
+	case CTRL_CLOSE_EVENT:
+	case CTRL_C_EVENT:
+		{
+			mg_stop(ctx);
+			if (g_ip[0] != '\0')
+				setup_server(NULL,g_ip,OFFLINE,NULL,0);
+			if (curl)
+			{
+				curl_easy_cleanup(curl);
+				curl_global_cleanup();
+			}
+
+			assert(g_nActive == 0);
+			g_nWaitingReaders = g_nWaitingWriters = g_nActive = 0;
+			DeleteCriticalSection(&g_cs);
+			CloseHandle(g_hsemReaders);
+			CloseHandle(g_hsemWriters);
+			return FALSE;
+		}
+	default:
+		break;
+	}
+	return TRUE;
 }
 
 #define INF_NAME "netsf"
@@ -590,15 +729,15 @@ int main(int argc,char *argv[])
 {
 	char path[MAX_PATH] = {0};
 	char name[32] = {0};
-	char msg[128] = {0};
+	MSG msg;
 	int error = 0;
 
 	//setup database
 	if (!sql_init("database.db"))
 		return EXIT_FAILURE;
 
+#ifndef DEVELOP_DEBUG
 	// Communication with driver
-	
 	while (!setup_comm(&error))
 	{
 		if (error == 1)
@@ -610,21 +749,28 @@ int main(int argc,char *argv[])
 		strncat(path,".inf",4);
 		load_driver_inf(path);
 	}
+#endif
 
+	if (SetConsoleCtrlHandler((PHANDLER_ROUTINE)ConsoleHandler,TRUE) == FALSE)
+	{
+		fprintf(stderr,"Unable to install Console Ctrl Handler");
+		return EXIT_FAILURE;
+	}
+	setup_rule();
+
+	init_rwlock();
 	// start web server
 	init_server_name();
 	start_mongoose(argc,argv);
 	printf("%s started on port(s) %s with web root [%s]\n",
 		server_name,mg_get_option(ctx,"listening_ports"),
 		mg_get_option(ctx,"document_root"));
-	while (exit_flag == 0)
-	{
-		sleep(1);
-	}
-	printf("Exiting on signal %d,waiting for all threads to finish...",exit_flag);
-	fflush(stdout);
-	mg_stop(ctx);
-	printf("%s"," done.\n");
 	
+	while (GetMessage(&msg,NULL,0,0))
+	{
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
+	}
+
 	return EXIT_SUCCESS;
 }

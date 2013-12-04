@@ -4,8 +4,7 @@
 #define IOCTL_SET_EVENT CTL_CODE(FILE_DEVICE_UNKNOWN,0x800,METHOD_BUFFERED,FILE_READ_DATA|FILE_WRITE_DATA)
 #define IOCTL_SET_EVENT_K CTL_CODE(FILE_DEVICE_UNKNOWN,0x801,METHOD_BUFFERED,FILE_READ_DATA|FILE_WRITE_DATA)
 #define IOCTL_GET_SHARE_ADDR CTL_CODE(FILE_DEVICE_UNKNOWN,0x802,METHOD_BUFFERED,FILE_READ_DATA|FILE_WRITE_DATA)
-#define IOCTL_ADD_RULE CTL_CODE(FILE_DEVICE_UNKNOWN,0x803,METHOD_BUFFERED,FILE_READ_DATA|FILE_WRITE_DATA)
-#define IOCTL_REMOVE_RULE CTL_CODE(FILE_DEVICE_UNKNOWN,0x804,METHOD_BUFFERED,FILE_READ_DATA|FILE_WRITE_DATA)
+#define IOCTL_MANAGE_RULE CTL_CODE(FILE_DEVICE_UNKNOWN,0x803,METHOD_BUFFERED,FILE_READ_DATA|FILE_WRITE_DATA)
 
 #define TCP_PROTOCOL 0x06
 #define UDP_PROTOCOL 0x11
@@ -20,15 +19,31 @@
 typedef enum _PacketStatus
 {
 	PacketDrop,
+	PacketWarn,
 	PacketPass
 }PacketStatus;
 
 typedef enum _PackDirection
 {
+	PACKET_BOTH,
 	PACKET_IN,
-	PACKET_OUT,
-	PACKET_BOTH
+	PACKET_OUT
 } PacketDirection;
+
+typedef enum _RuleManage
+{
+	ADD_RULE,
+	REMOVE_RULE
+} RuleManage;
+
+#define DATA_RULE_MAX_LEN 8
+#define RULE_NAME_MAX_LEN 8
+typedef struct _DataRule
+{
+	char pi[DATA_RULE_MAX_LEN];
+	int pos;
+	int len;
+} DataRule,*PDataRule;
 
 typedef struct _PktFltRule
 {
@@ -38,8 +53,12 @@ typedef struct _PktFltRule
 	USHORT dstPort;
 	UCHAR protocol;
 	USHORT etherType;
+	DataRule data;
 	PacketDirection direction;
 	PacketStatus status;
+	USHORT index;
+	RuleManage manage;
+	UCHAR name[RULE_NAME_MAX_LEN];
 } PktFltRule;
 
 typedef struct _PacketRecord 
@@ -54,16 +73,28 @@ typedef struct _PacketRecord
 	USHORT dstPort;
 	UCHAR status;
 	ULONG dataLen;
+	UCHAR event_name[RULE_NAME_MAX_LEN];
 } PacketRecord;
 
 typedef struct _RULE
 {
+	char name[8];
+	unsigned int index;
 	char type[8];
 	char src_ip[16];
 	char dst_ip[16];
-	char src_port[8];
-	char dst_port[8];
+	int src_port;
+	int dst_port;
 	char op[8];
+	DataRule data;
 } RULE,*PRULE;
+
+enum CLIENT_STATUS
+{
+	ONLINE = 0,
+	WARNING_1,
+	WARNING_2,
+	OFFLINE
+};
 
 #endif

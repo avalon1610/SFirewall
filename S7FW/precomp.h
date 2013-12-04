@@ -11,6 +11,7 @@
 
 #include <ntifs.h>
 #include <ndis.h>
+#include <Ntstrsafe.h>
 #include "passthru.h"
 #include "log.h"
 #include "packetmgr.h"

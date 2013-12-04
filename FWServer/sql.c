@@ -5,10 +5,11 @@
 #include <windows.h>
 #include "../include/userioctrl.h"
 
-#pragma comment(lib,"sqlite3.lib")
+#pragma comment(lib,"sqlite3")
 static sqlite3 *db = 0;
 
 const char *create_table_log = "CREATE TABLE if not exists [log] (\
+							   [event] VARCHAR2 NOT NULL,\
 								[type] VARCHAR2 NOT NULL,\
 								[src_mac] VARCHAR2 NOT NULL,\
 								[dst_mac] VARCHAR2 NOT NULL,\
@@ -20,11 +21,15 @@ const char *create_table_log = "CREATE TABLE if not exists [log] (\
 								[time] TIMESTAMP NOT NULL DEFAULT (datetime('now','localtime')));";
 
 const char *create_table_rule = "CREATE TABLE if not exists [rule] (\
+								[name] VARCHAR2 NOT NULL UNIQUE,\
 								[type] VARCHAR2 NOT NULL,\
 								[src_ip] VARCHAR2,\
 								[dst_ip] VARCHAR2,\
 								[src_port] INTEGER NOT NULL,\
 								[dst_port] INTEGER NOT NULL,\
+								[data_pi] VARCHAR2,\
+								[data_pos] INTEGER,\
+								[data_len] INTEGER,\
 								[operation] VARCHAR2 NOT NULL);";
 
 //const char *query_table_sql = "select count(*) from sqlite_master where table=[create_table_log];";
@@ -103,14 +108,20 @@ int sql_exec(const char *sql)
 	return true;
 }
 
-int RuleToDB(RULE rule)
+int RuleToDB(RULE rule,int bAdd)
 {
 	char sql[256] = {0};
-	sprintf_s(sql,sizeof(sql),"insert into rule (type,src_ip,dst_ip,src_port,dst_port,operation) values ('%s','%s','%s','%s','%s','%s')",
-		rule.type,strlen(rule.src_ip)?rule.src_ip:"*",strlen(rule.dst_ip)?rule.dst_ip:"*",strlen(rule.src_port)?rule.src_port:"*",
-		strlen(rule.dst_port)?rule.dst_port:"*",rule.op);
+	if (bAdd)
+		sprintf_s(sql,sizeof(sql),"insert into rule (name,type,src_ip,dst_ip,src_port,dst_port,data_pi,\
+								  data_pos,data_len,operation) values ('%s','%s','%s','%s',%d,%d,'%s',%d,%d,'%s')",
+			rule.name,rule.type,strlen(rule.src_ip)?rule.src_ip:"*",strlen(rule.dst_ip)?rule.dst_ip:"*",
+			rule.src_port,rule.dst_port,rule.data.pi,rule.data.pos,rule.data.len,rule.op);
+	else
+		sprintf_s(sql,sizeof(sql),"delete from rule where rowid=%d",rule.index);
 	return sql_exec(sql);
 }
+
+
 
 void LogToDB(PacketRecord *record)
 {
@@ -128,6 +139,9 @@ void LogToDB(PacketRecord *record)
 		break;
 	case PacketDrop:
 		strcpy_s(status,sizeof(status),"Denied");
+		break;
+	case PacketWarn:
+		strcpy_s(status,sizeof(status),"Warning");
 		break;
 	default:
 		strcpy_s(status,sizeof(status),"Unknown");
@@ -167,8 +181,8 @@ void LogToDB(PacketRecord *record)
 	sprintf_s(src_ip,sizeof(src_ip),"%d.%d.%d.%d",record->srcIP[0],record->srcIP[1],record->srcIP[2],record->srcIP[3]);
 	sprintf_s(dst_ip,sizeof(dst_ip),"%d.%d.%d.%d",record->dstIP[0],record->dstIP[1],record->dstIP[2],record->dstIP[3]);
 	sprintf_s(sql,sizeof(sql),
-		"insert into log (type,src_mac,dst_mac,src_ip,dst_ip,src_port,dst_port,status) values ('%s','%s','%s','%s','%s','%d','%d','%s')",
-		type,src_mac,dst_mac,src_ip,dst_ip,record->srcPort,record->dstPort,status);
+		"insert into log (event,type,src_mac,dst_mac,src_ip,dst_ip,src_port,dst_port,status) values ('%s','%s','%s','%s','%s','%s','%d','%d','%s')",
+		record->event_name,type,src_mac,dst_mac,src_ip,dst_ip,record->srcPort,record->dstPort,status);
 
 	sql_exec(sql);
 }
