@@ -14,11 +14,13 @@ HANDLE g_kEvent;
 HANDLE g_hFile;
 int bExit = 1;
 void LogToDB(PacketRecord *record);
-int RuleToDB(RULE,int);
+int RuleToDB(RULE,int *);
 char g_ip[16] = {0};
 
 CURL *curl = NULL;
 
+#define UPLOAD_URL "/updata.php"
+#define REGISTER_URL "/register.php"
 
 struct MemoryStruct {
 	char *memory;
@@ -108,7 +110,7 @@ int ReportLog(PacketRecord *record)
 	ZeroMemory(field,POST_FIELD_SIZE);
 	sprintf_s(field,POST_FIELD_SIZE,"client_time=%s&event=%s&source_ip=%s&dest_ip=%s",
 		date,record->event_name,srcIP,dstIP);
-	sprintf_s(url,sizeof(url),"http://%s/project/updata.php",g_ip);
+	sprintf_s(url,sizeof(url),"http://%s%s",g_ip,UPLOAD_URL);
 	send_post(url,field,ret,sizeof(ret));
 	if (strlen(ret))
 		fprintf(stderr,"%s",ret);
@@ -123,7 +125,7 @@ int setup_server(const char *name,const char *ip,const int status,char *ret,size
 	char field[32] = {0};
 
 	strcpy_s(g_ip,sizeof(g_ip),ip);
-	sprintf_s(url,sizeof(url),"http://%s/project/register.php",ip);
+	sprintf_s(url,sizeof(url),"http://%s%s",ip,REGISTER_URL);
 	sprintf_s(field,sizeof(field),"name=%s&status=%d",(name==NULL)?"\"\"":name,status);
 	return send_post(url,field,ret,retlen);
 }
@@ -263,18 +265,21 @@ FAIL_EXIT:
 	return FALSE;
 }
 
-int DeliveryRule(RULE r,int bAdd,int bToDB)
+int DeliveryRule(RULE r,int bToDB)
 {
 	DWORD retBytes;
 	PktFltRule rule;
 	DWORD temp_ip;
+	int new_index = 0;
 
-	if (bToDB && !RuleToDB(r,bAdd))
+	if (bToDB && !RuleToDB(r,&new_index))
 		return ERROR_SQL;
 
 	ZeroMemory(&rule,sizeof(PktFltRule));
-	rule.index = r.index;
-	rule.manage = bAdd?ADD_RULE:REMOVE_RULE;
+	if (r.manage == ADD_RULE && bToDB)
+		rule.index = new_index;
+	else
+		rule.index = r.index;
 	temp_ip = inet_addr(r.src_ip);
 	if (temp_ip != 0xffffffff)
 	{
@@ -317,6 +322,7 @@ int DeliveryRule(RULE r,int bAdd,int bToDB)
 	rule.data.pos = r.data.pos;
 	rule.data.len = r.data.len;
 	strcpy_s(rule.name,RULE_NAME_MAX_LEN,r.name);
+	rule.manage = r.manage;
 
 #ifndef DEVELOP_DEBUG
 	if (!DeviceIoControl(g_hFile,IOCTL_MANAGE_RULE,&rule,sizeof(rule),NULL,0,&retBytes,NULL))

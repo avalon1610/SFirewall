@@ -10,6 +10,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FWServer", "FWServer\FWServ
 		{CFA98A35-1A97-4884-815F-31CAC03EBC88} = {CFA98A35-1A97-4884-815F-31CAC03EBC88}
 	EndProjectSection
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "w7fw", "w7fw\w7fw.vcproj", "{E9C16295-3F4F-4E9C-BE68-3767F9DF2C6D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -27,6 +29,9 @@ Global
 		{E503EB83-93B0-41AD-950A-BD308DBB7C95}.Debug|Win32.Build.0 = Debug|Win32
 		{E503EB83-93B0-41AD-950A-BD308DBB7C95}.Release|Win32.ActiveCfg = Release|Win32
 		{E503EB83-93B0-41AD-950A-BD308DBB7C95}.Release|Win32.Build.0 = Release|Win32
+		{E9C16295-3F4F-4E9C-BE68-3767F9DF2C6D}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E9C16295-3F4F-4E9C-BE68-3767F9DF2C6D}.Release|Win32.ActiveCfg = Release|Win32
+		{E9C16295-3F4F-4E9C-BE68-3767F9DF2C6D}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

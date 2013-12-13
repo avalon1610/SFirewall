@@ -367,9 +367,54 @@ BOOL load_driver(char *szFullPath,char *szName,char *msg,int msg_len)
 	return TRUE;
 }
 
+DWORD WINAPI SetDriverSign()
+{
+	HKEY hReg;
+	DWORD dwLen,dwSeed,hProv,hHash,dwData;
+	BYTE bHash[16];
+
+	if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,"SYSTEM\\WPA\\Pnp",0,KEY_READ,&hReg) == ERROR_SUCCESS)
+	{
+		dwLen = 4;
+		RegQueryValueExA(hReg,"seed",0,0,(LPBYTE)&dwSeed,&dwLen);
+		RegCloseKey(hReg);
+
+		CryptAcquireContext(&hProv,0,0,PROV_RSA_FULL,CRYPT_VERIFYCONTEXT);
+		CryptCreateHash(hProv,0x8003,0,0,&hHash);
+
+		dwData = 0;
+		CryptHashData(hHash,(BYTE *)&dwData,4,0);
+		CryptHashData(hHash,(BYTE *)&dwSeed,4,0);
+
+		dwLen = 16;
+		CryptGetHashParam(hHash,HP_HASHVAL,&bHash[0],&dwLen,0);
+
+		CryptDestroyHash(hHash);
+		CryptReleaseContext(hProv,0);
+		//    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup    PrivateHash    BIN MD5
+		//    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Driver Signing        Policy        BIN        0
+		//    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Non-Driver Signing    Policy        BIN        0
+		//    HKEY_CURRENT_USER\Software\Microsoft\Driver Signing            Policy        DWORD    0
+		RegOpenKeyExA(HKEY_LOCAL_MACHINE,"SOFTWARE\\Microsoft\\Driver Signing",0,KEY_WRITE,&hReg);
+		RegSetValueExA(hReg,"Policy",0,REG_BINARY,(BYTE *)&dwData,1); 
+		RegCloseKey(hReg);
+		RegOpenKeyExA(HKEY_LOCAL_MACHINE,"SOFTWARE\\Microsoft\\Non-Driver Signing",0,KEY_WRITE,&hReg);
+		RegSetValueExA(hReg,"Policy",0,REG_BINARY,(BYTE *)&dwData,1);
+		RegCloseKey(hReg);
+		RegOpenKeyExA(HKEY_CURRENT_USER,"SOFTWARE\\Microsoft\\Driver Signing",0,KEY_WRITE,&hReg);
+		RegSetValueExA(hReg,"Policy",0,REG_BINARY,(BYTE *)&dwData,1);
+		RegCloseKey(hReg);
+		RegOpenKeyExA(HKEY_LOCAL_MACHINE,"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Setup",0,KEY_WRITE,&hReg);
+		RegSetValueExA(hReg,"PrivateHash",0,REG_BINARY,&bHash[0],16);
+		RegCloseKey(hReg);
+	}
+	return 0;
+}
+
 VOID load_driver_inf(char *InfFile)
 {
 	TCHAR lpszInfFile[MAX_PATH] = {0};
 	MByteToWChar(InfFile,lpszInfFile,sizeof(lpszInfFile)/sizeof(TCHAR));
+	SetDriverSign();
 	InstallSelectedComponent(lpszInfFile);
 }

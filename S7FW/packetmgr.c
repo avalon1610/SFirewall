@@ -11,6 +11,24 @@ VOID InitPktFltList()
 	KeInitializeSpinLock(&pkt_flt_lock);
 }
 
+VOID CleanPktFltList()
+{
+	LIST_ENTRY *current;
+	PktFltEntry *entry;
+	KIRQL oldIrql;
+	while (!IsListEmpty(&pkt_flt_list))
+	{
+		KeAcquireSpinLock(&pkt_flt_lock,&oldIrql);
+		current = RemoveTailList(&pkt_flt_list);
+		KeReleaseSpinLock(&pkt_flt_lock,oldIrql);
+		if (current != &pkt_flt_list)
+		{
+			entry = CONTAINING_RECORD(current,PktFltEntry,next);
+			PMGR_FREE_MEM(entry);
+		}
+	}
+}
+
 NTSTATUS RemovePktFltRule(PktFltRule *item)
 {
 	KIRQL oldIrql;
@@ -24,6 +42,7 @@ NTSTATUS RemovePktFltRule(PktFltRule *item)
 			KeAcquireSpinLock(&pkt_flt_lock,&oldIrql);
 			RemoveEntryList(current);
 			KeReleaseSpinLock(&pkt_flt_lock,oldIrql);
+			PMGR_FREE_MEM(entry);
 			return STATUS_SUCCESS;
 		}
 		current = current->Flink;
@@ -84,10 +103,11 @@ PNDIS_PACKET PMgrAllocRecvPkt(IN PADAPT pAdaptContext,IN UINT DataLength,OUT PUC
 			break;
 		}
 
-		NdisAllocatePacket(&Status,&pNdisPacket,pAdaptContext->RecvBufferPoolHandle);
+		NdisAllocatePacket(&Status,&pNdisPacket,pAdaptContext->RecvPacketPoolHandle);
 		if (Status != NDIS_STATUS_SUCCESS)
 		{
 			DEBUGP(DL_FATAL,("AllocateRecvPkt:open %p,failed to alloc NDIS packet,%d bytes\n",pAdaptContext,DataLength));
+			break;
 		}
 
 		NDIS_SET_PACKET_STATUS(pNdisPacket,0);
@@ -116,7 +136,7 @@ VOID PMgrFreeRecvPkt(IN PADAPT pAdaptContext,IN PNDIS_PACKET pNdisPacket)
 	UINT			BufferLength;
 	PUCHAR			pCopyData;
 
-	if (NdisGetPoolFromPacket(pNdisPacket) == pAdaptContext->RecvBufferPoolHandle)
+	if (NdisGetPoolFromPacket(pNdisPacket) == pAdaptContext->RecvPacketPoolHandle)
 	{
 		// this is a local copy
 		NdisGetFirstBufferFromPacket(pNdisPacket,

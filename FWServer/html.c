@@ -3,11 +3,7 @@
 #include "mongoose.h"
 #include "sql.h"
 #include "html.h"
-
-#define POST_DATA_LEN 1024
-#define IP_DATA_LEN 16
-#define PORT_DATA_LEN 8
-#define DATA_LEN 8
+#include "userioctrl.h"
 
 static const char *sql_error_msg = 
 "Sql Error ! check server output for more information.";
@@ -29,6 +25,9 @@ void HandleSQLData(char *data,int data_size,int nRow,int nCol,char **pResult)
 	{
 		if (i == 0)
 			strcat_s(data,data_size,"<thead>");
+		if (i == 1)
+			strcat_s(data,data_size,"<tbody>");
+
 		strcat_s(data,data_size,"<tr>");
 		for (j=0;j<nCol;j++)
 		{
@@ -49,10 +48,11 @@ void HandleSQLData(char *data,int data_size,int nRow,int nCol,char **pResult)
 		if (i == 0)
 			strcat_s(data,data_size,"</thead>");
 	}
+	strcat_s(data,data_size,"</tbody>");
 }
 
-#define GET_VER_STR(e,t,r) strcpy_s((e)->t,sizeof((e)->t),!cJSON_GetObjectItem(r,#t)->valuestring?"*":cJSON_GetObjectItem(r,#t)->valuestring)
-#define GET_VER_INT(e,t,r) (e)->t = cJSON_GetObjectItem(r,#t)->valueint
+#define GET_VER_STR(e,t,r) strcpy_s((e).t,sizeof((e).t),!cJSON_GetObjectItem(r,#t)->valuestring?"*":cJSON_GetObjectItem(r,#t)->valuestring)
+#define GET_VER_INT(e,t,r) (e).t = cJSON_GetObjectItem(r,#t)->valueint
 #define GET_VER_TYPE(t,r) cJSON_GetObjectItem(r,#t)->type
 #define GET_VER_INT_FUNC(e,t,r,d)\
 	if (GET_VER_TYPE(t,r) == cJSON_Number)\
@@ -62,7 +62,7 @@ else if (GET_VER_TYPE(t,r) == cJSON_String)\
 	strcpy_s(temp,sizeof(temp),cJSON_GetObjectItem(r,#t)->valuestring);\
 	if (strlen(temp) == 0)\
 	strcpy_s(temp,sizeof(temp),#d);\
-	e->t = atoi(temp);\
+	e.t = atoi(temp);\
 }\
 else return false;
 
@@ -82,7 +82,7 @@ typedef struct _input_entry
 	int input_data_len;
 }InputEntry,*PInputEntry;
 
-static int ParseJson(char *data,InputEntry **entry)
+static int ParseJson(char *data,InputEntry *entry)
 {
 	int i;
 	cJSON *EntryArray;
@@ -146,7 +146,7 @@ int post_handler(struct mg_event *event)
 		post_data_len = mg_read(event->conn,post_data,sizeof(post_data));
 		if (post_data_len != 0)
 		{
-			num = ParseJson(post_data,&input_list);
+			num = ParseJson(post_data,input_list);
 			if (num != 1)
 			{
 				status = ERROR_PARAMETER;
@@ -247,8 +247,8 @@ QUIT:
 
 		if (post_data_len != 0)
 		{
-			int bAdd,i;			
-			num = ParseJson(post_data,&input_list);
+			int i;			
+			num = ParseJson(post_data,input_list);
 			if (num == 0)
 			{
 				status = ERROR_PARAMETER;
@@ -267,9 +267,11 @@ QUIT:
 				rule.index = input_list[i].input_index;
 				strcpy_s(rule.op,sizeof(rule.op),input_list[i].input_op);
 				if (!_stricmp(input_list[i].input_manage,"ADD"))
-					bAdd = true;
+					rule.manage = ADD_RULE;
 				else if (!_stricmp(input_list[i].input_manage,"REMOVE"))
-					bAdd = false;
+					rule.manage = REMOVE_RULE;
+				else if (!_stricmp(input_list[i].input_manage,"UPDATE"))
+					rule.manage = UPDATE_RULE;
 				else
 				{
 					status = ERROR_PARAMETER;
@@ -279,7 +281,7 @@ QUIT:
 				rule.data.pos = input_list[i].input_data_pos;
 				rule.data.len = input_list[i].input_data_len;
 
-				status = DeliveryRule(rule,bAdd,true);
+				status = DeliveryRule(rule,true);
 				if (status != SUCCESS)
 					break;
 			}
@@ -329,12 +331,21 @@ CHECK_EXIT:
 		{
 			char **pResult;
 			int nRow,nCol;
-			char *data = (char *)malloc(DATA_SIZE/100);
+			char *data;
 			char header[128] = {0};
 			int data_len;
 			char sql[32] = {"select rowid,* from rule;"};
 			if (sql_query_sync(sql,&pResult,&nRow,&nCol))
 			{
+				if (nCol == 0)
+				{
+					mg_printf(event->conn,"HTTP/1.0 200 OK\r\n"
+						"Content-Length: 9\r\n"
+						"Content-Type: text/html\r\n\r\nNo Record");
+					break;
+				}
+
+				data = (char *)malloc(DATA_SIZE/100);
 				ZeroMemory(data,DATA_SIZE/100);
 				HandleSQLData(data,DATA_SIZE/100,nRow,nCol,pResult);
 				data_len = strlen(data);
@@ -344,8 +355,8 @@ CHECK_EXIT:
 					"<table border=\"1\">",data_len+26);
 
 				mg_printf(event->conn,"%s%s</table>\n",header,data);
+				free(data);
 			}
-			free(data);
 		}
 		break;
 	case ERROR_SQL:

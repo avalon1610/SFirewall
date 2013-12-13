@@ -33,11 +33,17 @@ typedef enum _PackDirection
 typedef enum _RuleManage
 {
 	ADD_RULE,
-	REMOVE_RULE
+	REMOVE_RULE,
+	UPDATE_RULE
 } RuleManage;
 
-#define DATA_RULE_MAX_LEN 8
-#define RULE_NAME_MAX_LEN 8
+#define DATA_RULE_MAX_LEN 32
+#define POST_DATA_LEN 2048
+#define IP_DATA_LEN 16
+#define PORT_DATA_LEN 8
+#define DATA_LEN 16
+#define RULE_NAME_MAX_LEN 16
+
 typedef struct _DataRule
 {
 	char pi[DATA_RULE_MAX_LEN];
@@ -78,15 +84,16 @@ typedef struct _PacketRecord
 
 typedef struct _RULE
 {
-	char name[8];
+	char name[RULE_NAME_MAX_LEN];
 	unsigned int index;
-	char type[8];
-	char src_ip[16];
-	char dst_ip[16];
+	char type[DATA_LEN];
+	char src_ip[IP_DATA_LEN];
+	char dst_ip[IP_DATA_LEN];
 	int src_port;
 	int dst_port;
-	char op[8];
+	char op[DATA_LEN];
 	DataRule data;
+	RuleManage manage;
 } RULE,*PRULE;
 
 enum CLIENT_STATUS

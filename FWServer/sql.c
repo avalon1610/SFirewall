@@ -41,19 +41,19 @@ int sql_init(const char *db_name)
 	ret = sqlite3_open(db_name,&db);
 	if (ret != SQLITE_OK)
 	{
-		fprintf(stderr,"Could not open database: %s",sqlite3_errmsg(db));
+		fprintf(stderr,"Could not open database: %s\n",sqlite3_errmsg(db));
 		return false;
 	}
 	
 	if (!sql_exec(create_table_log))
 	{
-		fprintf(stderr,"create table log error:%s",zErrMsg);
+		fprintf(stderr,"create table log error:%s\n",zErrMsg);
 		return false;
 	}
 
 	if (!sql_exec(create_table_rule))
 	{
-		fprintf(stderr,"create table rule error:%s",zErrMsg);
+		fprintf(stderr,"create table rule error:%s\n",zErrMsg);
 		return false;
 	}
 	return true;
@@ -68,7 +68,7 @@ int sql_query_sync(const char *sql,char ***pazResult,int *pnRow,int *pnColumn)
 	ret = sqlite3_get_table(db,sql,pazResult,pnRow,pnColumn,&pErrMsg);
 	if (ret != SQLITE_OK)
 	{
-		fprintf(stderr,"SQL Error:%s",pErrMsg);
+		fprintf(stderr,"SQL Error:%s\n",pErrMsg);
 		sqlite3_free(pErrMsg);
 		return false;
 	}
@@ -84,7 +84,7 @@ int sql_query_async(const char *sql,_CALLBACK callback,PVOID param)
 	ret = sqlite3_exec(db,sql,callback,param,&pErrMsg);
 	if (ret != SQLITE_OK)
 	{
-		fprintf(stderr,"SQL Error:%s",pErrMsg);
+		fprintf(stderr,"SQL Error:%s\n",pErrMsg);
 		sqlite3_free(pErrMsg);
 		return false;
 	}
@@ -100,7 +100,7 @@ int sql_exec(const char *sql)
 	ret = sqlite3_exec(db,sql,NULL,0,&pErrMsg);
 	if (ret != SQLITE_OK)
 	{
-		fprintf(stderr,"SQL Error:%s",pErrMsg);
+		fprintf(stderr,"SQL Error:%s\n",pErrMsg);
 		sqlite3_free(pErrMsg);
 		return false;
 	}
@@ -108,17 +108,38 @@ int sql_exec(const char *sql)
 	return true;
 }
 
-int RuleToDB(RULE rule,int bAdd)
+int RuleToDB(RULE rule,int *index)
 {
 	char sql[256] = {0};
-	if (bAdd)
+	int retcode;
+	if (rule.manage == ADD_RULE)
 		sprintf_s(sql,sizeof(sql),"insert into rule (name,type,src_ip,dst_ip,src_port,dst_port,data_pi,\
-								  data_pos,data_len,operation) values ('%s','%s','%s','%s',%d,%d,'%s',%d,%d,'%s')",
+								  data_pos,data_len,operation) values ('%s','%s','%s','%s',%d,%d,'%s',%d,%d,'%s');",
 			rule.name,rule.type,strlen(rule.src_ip)?rule.src_ip:"*",strlen(rule.dst_ip)?rule.dst_ip:"*",
 			rule.src_port,rule.dst_port,rule.data.pi,rule.data.pos,rule.data.len,rule.op);
-	else
-		sprintf_s(sql,sizeof(sql),"delete from rule where rowid=%d",rule.index);
-	return sql_exec(sql);
+	else if (rule.manage == REMOVE_RULE)
+		sprintf_s(sql,sizeof(sql),"delete from rule where rowid=%d;",rule.index);
+	else if (rule.manage == UPDATE_RULE)
+	{
+		sprintf_s(sql,sizeof(sql),"replace into rule (name,type,src_ip,dst_ip,src_port,dst_port,data_pi,\
+								  data_pos,data_len,operation) values ('%s','%s','%s','%s',%d,%d,'%s',%d,%d,'%s');",
+								  rule.name,rule.type,strlen(rule.src_ip)?rule.src_ip:"*",strlen(rule.dst_ip)?rule.dst_ip:"*",
+								  rule.src_port,rule.dst_port,rule.data.pi,rule.data.pos,rule.data.len,rule.op);
+	}
+	
+	retcode = sql_exec(sql);
+	if (retcode && rule.manage == ADD_RULE)
+	{
+		char **pResult;
+		int nRow,nCol;
+		sprintf_s(sql,sizeof(sql),"select rowid from rule where name='%s';",rule.name);
+		if (sql_query_sync(sql,&pResult,&nRow,&nCol) && nCol != 0 && nRow == 1)
+		{
+			*index = atoi(pResult[1]);
+		}
+	}
+
+	return retcode;
 }
 
 

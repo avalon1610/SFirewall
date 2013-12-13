@@ -1321,6 +1321,9 @@ Return Value:
     PNDIS_PACKET        MyPacket;
     BOOLEAN             Remaining;
 
+	UINT packet_len;
+	PUCHAR pDataBuffer;
+	PacketStatus packet_status = PacketPass;
     //
     // Drop the packet silently if the upper miniport edge isn't initialized or
     // the miniport edge is in low power state
@@ -1329,6 +1332,17 @@ Return Value:
     {
           return 0;
     }
+
+	NdisQueryPacketLength(Packet,&packet_len);
+	PMGR_ALLOC_MEM(pDataBuffer,packet_len);
+	if (pDataBuffer != NULL)
+	{
+		PMgrGetPktData(Packet,pDataBuffer,packet_len);
+		packet_status = FilterPacket(pDataBuffer,packet_len,PACKET_IN);
+		PMGR_FREE_MEM(pDataBuffer);
+		if (packet_status == PacketDrop)
+			return (0);
+	}
 
 #ifdef NDIS51
     //
@@ -1357,11 +1371,6 @@ Return Value:
     if (Status == NDIS_STATUS_SUCCESS)
     {
         PRECV_RSVD            RecvRsvd;
-
-		UINT packet_len;
-		PUCHAR pDataBuffer;
-		PacketStatus packet_status = PacketPass;
-
         RecvRsvd = (PRECV_RSVD)(MyPacket->MiniportReserved);
         RecvRsvd->OriginalPkt = Packet;
 
@@ -1386,16 +1395,7 @@ Return Value:
         NDIS_SET_PACKET_STATUS(MyPacket, Status);
         NDIS_SET_PACKET_HEADER_SIZE(MyPacket, NDIS_GET_PACKET_HEADER_SIZE(Packet));
 
-		NdisQueryPacketLength(Packet,&packet_len);
-		PMGR_ALLOC_MEM(pDataBuffer,packet_len);
-		if (pDataBuffer != NULL)
-		{
-			PMgrGetPktData(Packet,pDataBuffer,packet_len);
-			packet_status = FilterPacket(pDataBuffer,packet_len,PACKET_IN);
-			PMGR_FREE_MEM(pDataBuffer);
-		}
-
-        if (pAdapt->MiniportHandle != NULL && packet_status != PacketDrop)
+        if (pAdapt->MiniportHandle != NULL)
         {
             NdisMIndicateReceivePacket(pAdapt->MiniportHandle, &MyPacket, 1);
         }
@@ -1405,7 +1405,7 @@ Return Value:
         // NOTE -- do not use NDIS_GET_PACKET_STATUS(MyPacket) for this since
         // it might have changed! Use the value saved in the local variable.
         //
-        if (Status == NDIS_STATUS_RESOURCES || packet_status == PacketDrop || pAdapt->MiniportHandle == NULL)
+        if (Status == NDIS_STATUS_RESOURCES)
         {
             //
             // Our ReturnPackets handler will not be called for this packet.

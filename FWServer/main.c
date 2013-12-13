@@ -233,6 +233,13 @@ static int is_authorized(const struct mg_connection *conn,
 	struct session *session;
 	char valid_id[33];
 	int authorized = 0;
+	
+	if (g_ip[0] != '\0')
+	{
+		long ip = ntohl(inet_addr(g_ip));
+		if (ip == request_info->remote_ip)
+			return 1;
+	}
 
 	// Always authorize accesses to login page and to authorize URI
 	if (!strcmp(request_info->uri,login_url) ||
@@ -681,7 +688,8 @@ int setup_rule()
 			rule.data.pos = atoi(azResult[nIndex++]);
 			rule.data.len = atoi(azResult[nIndex++]);
 			strcpy_s(rule.op,sizeof(rule.op),azResult[nIndex++]);
-			if (SUCCESS == DeliveryRule(rule,true,false))
+			rule.manage = ADD_RULE;
+			if (SUCCESS == DeliveryRule(rule,false))
 				printf("Loading Rules from Database...%d\n",i);
 			else
 			{

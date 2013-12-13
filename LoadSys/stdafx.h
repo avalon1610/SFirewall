@@ -23,3 +23,4 @@
 #include <devguid.h>
 #include <ObjBase.h>
 #include <strsafe.h>
+#include <Wincrypt.h>

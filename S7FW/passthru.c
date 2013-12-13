@@ -54,6 +54,7 @@ BOOLEAN			b_ExitThread = FALSE;
 
 NTSTATUS AddPktFltRule(PktFltRule *pkt_flt_item);
 NTSTATUS RemovePktFltRule(PktFltRule *pkt_flt_item);
+VOID CleanPktFltList();
 
 //
 // To support ioctls from user-mode:
@@ -334,6 +335,9 @@ void CleanUp()
 {
 	PETHREAD ethread;
 	b_ExitThread = TRUE;
+	if (g_ExitEvent == NULL)
+		return;
+	CleanPktFltList();
 	KeSetEvent(g_ExitEvent,0,FALSE);
 	if (PsLookupThreadByThreadId(g_LogClientId.UniqueThread,&ethread) == STATUS_SUCCESS)
 	{
@@ -498,13 +502,19 @@ Return Value:
 						rule = *(PktFltRule *)Buffer;
 						if (rule.manage == ADD_RULE)
 						{
-							AddPktFltRule(&rule);
-							DBGPRINT(("Add Rule %p\n",&rule))
+							status = AddPktFltRule(&rule);
+							DBGPRINT(("Add Rule %p [%08X]\n",&rule,RtlNtStatusToDosError(status)))
 						}
 						else if (rule.manage == REMOVE_RULE)
 						{
-							RemovePktFltRule(&rule);
-							DBGPRINT(("Remove Rule %p\n",&rule));
+							status = RemovePktFltRule(&rule);
+							DBGPRINT(("Remove Rule %p [%08X]\n",&rule,RtlNtStatusToDosError(status)));
+						}
+						else if (rule.manage == UPDATE_RULE)
+						{
+							status = RemovePktFltRule(&rule);
+							status = AddPktFltRule(&rule);
+							DBGPRINT(("Update Rule %p [%08X]\n",&rule,RtlNtStatusToDosError(status)));
 						}
 						else
 						{

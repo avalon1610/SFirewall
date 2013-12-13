@@ -210,6 +210,11 @@ Return Value:
     PVOID               MediaSpecificInfo = NULL;
     ULONG               MediaSpecificInfoSize = 0;
 
+	UINT packet_len;
+	PUCHAR pDataBuffer;
+
+	PacketStatus packet_status;
+
     //
     // The driver should fail the send if the virtual miniport is in low 
     // power state
@@ -218,6 +223,24 @@ Return Value:
     {
          return NDIS_STATUS_FAILURE;
     }
+
+	packet_status = PacketPass;
+	NdisQueryPacketLength(Packet,&packet_len);
+	PMGR_ALLOC_MEM((PVOID *)pDataBuffer,packet_len);
+	if (pDataBuffer != NULL)
+	{
+		PMgrGetPktData(Packet,pDataBuffer,packet_len);
+		packet_status = FilterPacket(pDataBuffer,packet_len,PACKET_OUT);
+		PMGR_FREE_MEM(pDataBuffer);
+	}
+
+	if (packet_status == PacketDrop)
+	{
+		Status = NDIS_STATUS_SUCCESS;
+		ADAPT_DECR_PENDING_SENDS(pAdapt);
+		return (0);
+	}
+
 
 #ifdef NDIS51
     //
@@ -292,11 +315,6 @@ Return Value:
     {
         PSEND_RSVD            SendRsvd;
 
-		UINT packet_len;
-		PUCHAR pDataBuffer;
-
-		PacketStatus packet_status;
-
         //
         // Save a pointer to the original packet in our reserved
         // area in the new packet. This is needed so that we can
@@ -353,22 +371,9 @@ Return Value:
                                                 MediaSpecificInfoSize);
         }
 
-		packet_status = PacketPass;
-		NdisQueryPacketLength(Packet,&packet_len);
-		PMGR_ALLOC_MEM((PVOID *)pDataBuffer,packet_len);
-		if (pDataBuffer != NULL)
-		{
-			PMgrGetPktData(Packet,pDataBuffer,packet_len);
-			packet_status = FilterPacket(pDataBuffer,packet_len,PACKET_OUT);
-			PMGR_FREE_MEM(pDataBuffer);
-		}
-
-		Status = NDIS_STATUS_SUCCESS;
-
-		if (packet_status != PacketDrop)
-			NdisSend(&Status,
-					 pAdapt->BindingHandle,
-					 MyPacket);
+		NdisSend(&Status,
+				 pAdapt->BindingHandle,
+				 MyPacket);
 
 
         if (Status != NDIS_STATUS_PENDING)
@@ -424,6 +429,10 @@ Return Value:
     UINT                i;
     PVOID               MediaSpecificInfo = NULL;
     UINT                MediaSpecificInfoSize = 0;
+
+	UINT packet_len;
+	PUCHAR pDataBuffer;
+	PacketStatus packet_status;
     
 
     for (i = 0; i < NumberOfPackets; i++)
@@ -442,6 +451,27 @@ Return Value:
                             NDIS_STATUS_FAILURE);
             continue;
         }
+
+		packet_status = PacketPass;
+		NdisQueryPacketLength(Packet,&packet_len);
+		PMGR_ALLOC_MEM((PVOID *)pDataBuffer,packet_len);
+		if (pDataBuffer != NULL)
+		{
+			PMgrGetPktData(Packet,pDataBuffer,packet_len);
+			packet_status = FilterPacket(pDataBuffer,packet_len,PACKET_OUT);
+			PMGR_FREE_MEM(pDataBuffer);
+		}
+
+		if (packet_status == PacketDrop)
+		{
+			Status = NDIS_STATUS_SUCCESS;
+			NdisMSendComplete(ADAPT_MINIPORT_HANDLE(pAdapt),
+							Packet,
+							Status);
+
+			ADAPT_DECR_PENDING_SENDS(pAdapt);
+			continue;
+		}
 
 #ifdef NDIS51
 
@@ -521,10 +551,6 @@ Return Value:
             {
                 PSEND_RSVD        SendRsvd;
 
-				UINT packet_len;
-				PUCHAR pDataBuffer;
-				PacketStatus packet_status;
-
                 SendRsvd = (PSEND_RSVD)(MyPacket->ProtocolReserved);
                 SendRsvd->OriginalPkt = Packet;
 
@@ -568,22 +594,10 @@ Return Value:
                                                         MediaSpecificInfoSize);
                 }
 
-				packet_status = PacketPass;
-				NdisQueryPacketLength(Packet,&packet_len);
-				PMGR_ALLOC_MEM(pDataBuffer,packet_len);
-				if (pDataBuffer != NULL)
-				{
-					PMgrGetPktData(Packet,pDataBuffer,packet_len);
-					packet_status = FilterPacket(pDataBuffer,packet_len,PACKET_OUT);
-					PMGR_FREE_MEM(pDataBuffer);
-				}
-
-				Status = NDIS_STATUS_SUCCESS;
-
-				if (packet_status != PacketDrop)
-					NdisSend(&Status,
-							 pAdapt->BindingHandle,
-							 MyPacket);
+				
+				NdisSend(&Status,
+						 pAdapt->BindingHandle,
+						 MyPacket);
 
                 if (Status != NDIS_STATUS_PENDING)
                 {
